@@ -70,6 +70,10 @@ INSERT INTO audit.pipeline_run (run_id, mode, status, start_date, end_date, as_o
                                 duration_s, failed_task, error_message, tasks, report)
 VALUES (:run_id, :mode, :status, :start_date, :end_date, :as_of_date, :started_at, :completed_at,
         :duration_s, :failed_task, :error_message, CAST(:tasks AS jsonb), CAST(:report AS jsonb))
+ON CONFLICT (run_id) DO UPDATE SET
+    status = EXCLUDED.status, completed_at = EXCLUDED.completed_at, duration_s = EXCLUDED.duration_s,
+    failed_task = EXCLUDED.failed_task, error_message = EXCLUDED.error_message, tasks = EXCLUDED.tasks,
+    report = EXCLUDED.report
 """
 
 

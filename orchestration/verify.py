@@ -24,6 +24,7 @@ MODE_LAYERS = {
     "train": ("core", "ml_model"),
     "score": ("core", "ml"),
     "backfill": ("core", "mart"),
+    "airflow": ("core", "mart", "ml"),
 }
 
 CONSTRAINTS_SQL = """
