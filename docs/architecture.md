@@ -13,6 +13,7 @@ This document describes the platform as built. Detailed contracts live in the co
 | [ml_evaluation_report.md](ml_evaluation_report.md) | Measured metrics, baselines, error analysis |
 | [airflow.md](airflow.md) | Airflow DAG: tasks, data intervals, backfill, retries, deployment, test results |
 | [superset.md](superset.md) | Superset dashboard: BI views and role, metric definitions, filters, deployment, validation against PostgreSQL |
+| [clickhouse.md](clickhouse.md) | ClickHouse analytical copy: table engines, partitioning, sorting keys, incremental sync, deduplication, consistency tolerances, benchmark |
 
 ## 1. Shape of the system
 
@@ -31,7 +32,7 @@ flowchart LR
   score --> pred["Prediction Mart<br/>ml.ml_price_predictions"]
 ```
 
-Two orchestrators call the same task functions in `orchestration/tasks.py`. The command-line runner (`orchestration/dag.py`, `orchestration/runner.py`) is what `docker compose up` runs. The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` (compose profile `airflow`) adds daily data intervals, backfills, per-task retries and timeouts, and run history. Each Airflow task runs one step of `orchestration/airflow_steps.py` in the platform's own virtualenv, because Airflow's dependency constraints pin other versions of Polars, pandas, and psycopg; see [airflow.md](airflow.md). Apache Superset 6.1 (compose profile `superset`) serves the dashboard "Smart Logistics — Market Rate Intelligence". It reads three views in schema `mart` through the read-only login `bi_reader`, and the views add no business rules. See [superset.md](superset.md). ClickHouse is not used.
+Two orchestrators call the same task functions in `orchestration/tasks.py`. The command-line runner (`orchestration/dag.py`, `orchestration/runner.py`) is what `docker compose up` runs. The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` (compose profile `airflow`) adds daily data intervals, backfills, per-task retries and timeouts, and run history. Each Airflow task runs one step of `orchestration/airflow_steps.py` in the platform's own virtualenv, because Airflow's dependency constraints pin other versions of Polars, pandas, and psycopg; see [airflow.md](airflow.md). Apache Superset 6.1 (compose profile `superset`) serves the dashboard "Smart Logistics — Market Rate Intelligence". It reads three views in schema `mart` through the read-only login `bi_reader`, and the views add no business rules. See [superset.md](superset.md). ClickHouse 26.8 (compose profile `clickhouse`) holds an analytical copy built by `python -m etl.clickhouse.sync`. PostgreSQL stays authoritative: the sync copies changed partitions, verifies each by row fingerprint, and checks the ClickHouse corridor and ML error summary against the PostgreSQL mart and views. Eligibility rules stay in PostgreSQL (`mart.market_corridor_observations`). See [clickhouse.md](clickhouse.md).
 
 ## 2. Databases, roles, and schemas
 

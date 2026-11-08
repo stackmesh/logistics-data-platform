@@ -32,7 +32,7 @@ A local, repeatable batch platform on PostgreSQL 17 and Python 3.12. It loads a 
 24. [Example SQL queries](#24-example-sql-queries)
 25. [Known limitations and future improvements](#25-known-limitations-and-future-improvements)
 
-Detailed documents: [architecture](docs/architecture.md), [data dictionary](docs/data_dictionary.md), [ETL design](docs/etl_design.md), [data quality report](docs/data_quality_report.md), [mart design](docs/mart_design.md), [feature engineering report](docs/feature_engineering_report.md), [ML design](docs/ml_design.md), [ML evaluation report](docs/ml_evaluation_report.md), [Airflow orchestration](docs/airflow.md), [Superset dashboard](docs/superset.md).
+Detailed documents: [architecture](docs/architecture.md), [data dictionary](docs/data_dictionary.md), [ETL design](docs/etl_design.md), [data quality report](docs/data_quality_report.md), [mart design](docs/mart_design.md), [feature engineering report](docs/feature_engineering_report.md), [ML design](docs/ml_design.md), [ML evaluation report](docs/ml_evaluation_report.md), [Airflow orchestration](docs/airflow.md), [Superset dashboard](docs/superset.md), [ClickHouse analytical copy](docs/clickhouse.md).
 
 ## 1. Project overview
 
@@ -82,6 +82,9 @@ flowchart LR
   mart --> bi["BI views mart.v_*<br/>read-only bi_reader"]
   pred --> bi
   bi --> superset["Apache Superset<br/>Market Rate Intelligence"]
+  core -.->|incremental sync<br/>fingerprint-verified| ch[("ClickHouse<br/>MergeTree family")]
+  mart -.-> ch
+  pred -.-> ch
 ```
 
 Two orchestrators run the same task functions:
@@ -90,6 +93,8 @@ Two orchestrators run the same task functions:
 - The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` runs one data interval per day, plus backfills: `check_source_connectivity → validate_source_data → prepare_warehouse → run_etl → run_data_quality → (refresh_marts ‖ generate_features → train_or_load_model → run_batch_inference) → validate_prediction_records → publish_pipeline_statistics`. See [docs/airflow.md](docs/airflow.md).
 
 The Apache Superset dashboard **Smart Logistics — Market Rate Intelligence** (compose profile `superset`) reads three views in schema `mart` through the read-only login `bi_reader`. It has four tabs: Market Overview, Route Pricing, Market Dynamics, and Fact vs Forecast. See [docs/superset.md](docs/superset.md).
+
+ClickHouse 26.8 (compose profile `clickhouse`) holds an analytical copy for heavy aggregations: normalized deals, corridor observations, monthly route statistics as aggregate states, the market corridor, and ML prediction analytics. PostgreSQL remains the source and the authoritative warehouse. `python -m etl.clickhouse.sync` copies only changed partitions, verifies each against PostgreSQL by row fingerprint before and after publishing it, and checks every corridor cell against `mart.mart_market_corridor` within documented tolerances. On identical data the four aggregation benchmarks ran 11–20× faster at 291,000 rows and 21–43× faster at 2.9 million rows. Single-route filtering was equal at 291,000 rows and 10× faster at 2.9 million. All results were equal in both systems. See [docs/clickhouse.md](docs/clickhouse.md).
 
 ## 4. Technology stack
 
@@ -105,9 +110,10 @@ The Apache Superset dashboard **Smart Logistics — Market Rate Intelligence** (
 | Deployment | Docker Compose | One command to build the snapshot, warehouse, mart, and model |
 | Scheduling | Apache Airflow 3.4 (optional compose profile) | Daily data intervals, backfills, per-task retries and timeouts, run history. Tasks run the platform in its own virtualenv, because Airflow's constraints pin other library versions |
 | BI | Apache Superset 6.1 (optional compose profile) | Dashboard for procurement managers, provisioned from code over the REST API, reading the warehouse with a read-only role |
-| Tests | pytest | 309 tests: unit and integration against the real snapshot, plus Airflow DAG and Superset BI tests |
+| OLAP | ClickHouse 26.8 LTS (optional compose profile), clickhouse-connect | Columnar copy for large aggregations and exact percentiles; rebuilt from PostgreSQL, never written by users |
+| Tests | pytest | 330 tests: unit and integration against the real snapshot, plus Airflow DAG, Superset BI, and ClickHouse sync tests |
 
-All 33 Python packages are pinned in `constraints.txt` (`pip install -r requirements.txt -c constraints.txt`).
+All 39 Python packages are pinned in `constraints.txt` (`pip install -r requirements.txt -c constraints.txt`).
 
 ## 5. Database architecture
 
@@ -472,6 +478,17 @@ docker compose --profile superset logs -f superset-provision           # ends wi
 
 On a warehouse volume created before this profile existed, create the BI role once: `docker compose exec postgres bash /docker-entrypoint-initdb.d/03_bi_reader.sh`, then `docker compose run --rm pipeline python -m etl.migrate`. Variables: `BI_DB_USER`, `BI_DB_PASSWORD`, `SUPERSET_DB_*`, `SUPERSET_SECRET_KEY`, `SUPERSET_ADMIN_*`, `SUPERSET_PUBLISH_PORT`. Metric definitions, filter scopes, the PostgreSQL validation (91 of 91 checks match), and running without Docker are in [docs/superset.md](docs/superset.md).
 
+**ClickHouse.** The `clickhouse` profile adds the server at `http://127.0.0.1:18123` and the one-shot `clickhouse-sync`, which applies the ClickHouse DDL, copies changed partitions, and exits 0 only when ClickHouse matches PostgreSQL:
+
+```bash
+docker compose --profile clickhouse up -d clickhouse
+docker compose --profile clickhouse run --rm clickhouse-sync                     # after each pipeline run
+docker compose --profile clickhouse run --rm clickhouse-sync python -m etl.clickhouse.sync --months 2025-01..2025-03
+docker compose --profile clickhouse run --rm clickhouse-sync python -m etl.clickhouse.check
+```
+
+Variables: `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT`, `CLICKHOUSE_DB`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_PUBLISH_PORT`, `CLICKHOUSE_INSERT_BATCH_ROWS`, `CLICKHOUSE_WATERMARK_OVERLAP_S`. Engines, partitioning, deduplication, tolerances, and the benchmark (`scripts/benchmark_clickhouse.py`) are in [docs/clickhouse.md](docs/clickhouse.md).
+
 **Running from the host** against the compose database (Python 3.11+):
 
 ```bash
@@ -501,8 +518,9 @@ pytest -q                                           # everything; needs the data
 | Pipeline | `test_pipeline_runner.py`, `test_pipeline_integration.py` |
 | Airflow | `test_airflow_steps.py`, `test_airflow_dag.py` (DAG graph and retry tests run only where `apache-airflow` is installed: `.venv-airflow/bin/python -m pytest -o addopts="" tests/test_airflow_dag.py`) |
 | Superset BI | `test_superset_bi.py` (BI views against the mart, `bi_reader` privileges, dashboard specification); chart data against PostgreSQL: `superset/validate.py` |
+| ClickHouse | `test_clickhouse.py` (plan, fingerprint, and tolerance units; sync into a scratch database: full, idempotent re-run, backfill, drift repair, PostgreSQL updates and deletes, late predictions, refused unverified loads, lock). Skips the integration part when ClickHouse is unreachable |
 
-Latest result against a clean warehouse: **303 passed, 6 skipped in 413.81 s**. The 6 skipped tests need `apache-airflow`; in the Airflow virtualenv, `tests/test_airflow_dag.py` gives 21 passed. `-m "not integration"` alone: 186 passed, 6 skipped in 2.5 s with no database configured. The `bi_reader` tests need the role and `BI_DB_PASSWORD`, and skip without them. Integration tests commit idempotent batches to the warehouse they target and assert the exact counts of the 300,000-deal snapshot, so run them against a disposable warehouse built from that snapshot.
+Latest result against a clean warehouse and a local ClickHouse 26.8 server: **324 passed, 6 skipped in 541.54 s**. The 6 skipped tests need `apache-airflow`; in the Airflow virtualenv, `tests/test_airflow_dag.py` gives 21 passed. `-m "not integration"` alone: 199 passed, 6 skipped in 2.4 s with no database configured. The 8 ClickHouse integration tests skip when `CLICKHOUSE_*` is unset or the server is unreachable. The `bi_reader` tests need the role and `BI_DB_PASSWORD`, and skip without them. Integration tests commit idempotent batches to the warehouse they target and assert the exact counts of the 300,000-deal snapshot, so run them against a disposable warehouse built from that snapshot.
 
 Quality tools:
 
@@ -580,6 +598,7 @@ FROM audit.pipeline_run ORDER BY started_at DESC LIMIT 5;
 - Training ran on Python 3.11; the image uses 3.12 with the same pinned package versions.
 - The Airflow image and compose services were never started either. The DAG ran on Airflow 3.4.0 outside Docker against the clean cluster: normal, backfill, repeated, transient-failure, and permanent-failure runs ([docs/airflow.md](docs/airflow.md), section 8).
 - The Superset image and compose services were never started. The dashboard was provisioned on Superset 6.1.0 from a virtualenv against the clean cluster, checked against PostgreSQL (91 of 91 checks), and opened in a browser ([docs/superset.md](docs/superset.md), section 5).
+- The ClickHouse image and compose services were never started. The sync, checks, tests, and benchmark ran against the official ClickHouse 26.8.34.13 binary, the version of the image tag ([docs/clickhouse.md](docs/clickhouse.md), section 10).
 
 **Data and ETL**
 

@@ -13,7 +13,7 @@ The ETL passed every check in this audit:
 | Backfill | Overlapping windows do not multiply rows. Reloading an emptied range reproduces the full load exactly. |
 | Transaction safety | Failed, killed, and concurrent loads leave no partial data. |
 
-At the time of this audit the ETL suite had 103 tests and all of them passed. The whole platform suite, including the later mart, ML, and pipeline stages, now has 309 tests; see the README for the latest run.
+At the time of this audit the ETL suite had 103 tests and all of them passed. The whole platform suite, including the later mart, ML, and pipeline stages, now has 330 tests; see the README for the latest run.
 
 **Environment caveat.** Results come from PostgreSQL 17.11 running locally, with the same two databases, roles, and migrations that Docker Compose creates. Docker is not installed on the audit machine, so `docker compose --profile test run --rm tests` has not been executed here. The suite uses only environment variables, so the container runs the same tests.
 

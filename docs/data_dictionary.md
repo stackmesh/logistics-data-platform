@@ -1039,6 +1039,30 @@ Check constraints:
 | `mart.refresh_market_corridor(IN p_as_of date, IN p_refresh_id bigint, INOUT rows_deleted bigint, INOUT rows_inserted bigint)` | procedure | Replace mart.mart_market_corridor for a snapshot date inside the caller's transaction. |
 | `ml.upsert_price_predictions(p_model_name text, p_model_version text, p_as_of date, p_batch_id bigint, p_split_roles text[])` | function |  |
 
+## 7a. ClickHouse analytical copy (database `CLICKHOUSE_DB`, default `logistics`)
+
+Not part of PostgreSQL. Built only by `python -m etl.clickhouse.sync` from the PostgreSQL objects named below, and checked against them; DDL in `clickhouse/sql/001_schema.sql`. Design and trade-offs: [clickhouse.md](clickhouse.md).
+
+| Table | Engine | Partition | Sorting key | Source in PostgreSQL | Rows now |
+| --- | --- | --- | --- | --- | ---: |
+| `fact_deal` | MergeTree | `toYYYYMM(loading_date)` | route, body group, weight category, `loading_date`, `price_id` | `core.fact_deal` (all columns except `source_system`, `extracted_at`) | 299,797 |
+| `fact_price_observation` | MergeTree | `toYYYYMM(price_month)` | route, body group, weight category, `price_month`, `price_id` | `mart.market_corridor_observations(as_of)` plus `distance_km`, `price_km` as `float8`, `as_of_date` | 291,020 |
+| `route_month_stats` | AggregatingMergeTree | `toYYYYMM(price_month)` | route, body group, weight category, `price_month` | derived from `fact_price_observation` | 203,644 |
+| `market_corridor` | MergeTree | `toYYYYMM(price_month)` | route, body group, weight category, `price_month` | derived; compared with `mart.mart_market_corridor` | 203,644 |
+| `ml_price_predictions` | ReplacingMergeTree(`scored_at`) | `model_version` | `model_name`, `model_version`, `price_id` | `ml.ml_price_predictions` | 17,699 |
+| `ml_prediction_daily` | SummingMergeTree | `model_version` | model, `record_type`, `loading_date`, route, `body_group` | derived; compared with `ml.v_prediction_error_summary` | 15,802 |
+| `dim_city`, `dim_body_group` | MergeTree | — | `gc_id`, `body_group_code` | `core.dim_city` (`gc_id`, `name`), `core.dim_body_group` (code, name) | 40, 6 |
+| `sync_watermark` | ReplacingMergeTree(`updated_at`) | — | `source` | prediction `scored_at` watermark | 1 per source |
+| `sync_log` | MergeTree | `toYYYYMM(started_at)` | `started_at`, `run_id`, table, partition | one row per partition action and per run | append-only |
+
+Column types: integers keep their width (`UInt64` for `price_id`, `UInt32` for city codes), money and quantities keep their PostgreSQL decimal scale (`Decimal(18,2)`, `Decimal(12,3)`, `Decimal(18,6)`, `Decimal(12,4)`), `timestamp(0)` becomes `DateTime('UTC')`, `timestamptz` becomes `DateTime64(6,'UTC')`, and nullable PostgreSQL columns are `Nullable`. Synced base tables carry `_sync_run_id` and `_loaded_at`.
+
+`route_month_stats` columns: `observations`, `price_rub_sum`, `price_km_sum`, `max_price_date` (simple aggregates); `trips` (`uniqExact(price_id)`), `carriers` (`uniqExactIf(organization_id, price_type IN (3, 9))`), `price_quantiles` and `price_km_quantiles` (`quantilesExactInclusive(0.25, 0.5, 0.75)`), `price_stddev` (`stddevSampStable(price_rub)`). Read with the `-Merge` combinators.
+
+`market_corridor` has the columns of `mart.mart_market_corridor` without `refresh_id`, with unrounded `Float64` values.
+
+`ml_prediction_daily` columns: `deals`, `actual_deals`, `actual_sum`, `predicted_sum`, `signed_error_sum` (predicted − actual), `abs_error_sum`, `sq_error_sum`, `ape_sum`. `record_type` is `historical` for `split_role = 'test'`, else `future`.
+
 ## 8. Relationship overview
 
 ```mermaid
