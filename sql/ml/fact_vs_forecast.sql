@@ -3,6 +3,11 @@
 
 \pset footer off
 
+-- Queries 3-9 describe one model: the most recently registered version.
+SELECT model_version AS latest_version FROM ml.ml_model_registry
+ORDER BY registered_at DESC, model_version LIMIT 1 \gset
+\echo 'Latest model version:' :latest_version
+
 \echo '1. Summary per model version and record type'
 SELECT model_version, record_type, deals, first_loading_date, last_loading_date, mean_actual_rub,
        mean_predicted_rub, mae_rub, rmse_rub, mape_pct, r2, bias_rub, median_ape_pct, p90_ape_pct,
@@ -19,7 +24,7 @@ ORDER BY model_version, ape_band;
 SELECT price_id, loading_date, origin_city || ' -> ' || destination_city AS route, body_group, distance_km,
        actual_price_rub, predicted_price_rub, error_rub, ape_pct
 FROM ml.v_fact_vs_forecast
-WHERE record_type = 'historical'
+WHERE model_version = :'latest_version' AND record_type = 'historical'
 ORDER BY abs_error_rub DESC, price_id
 LIMIT 10;
 
@@ -28,7 +33,7 @@ SELECT body_group_name, count(*) AS deals, round(avg(actual_price_rub)) AS mean_
        round(avg(predicted_price_rub)) AS mean_predicted, round(avg(abs_error_rub)) AS mae_rub,
        round(avg(ape_pct), 2) AS mape_pct, round(avg(pct_error), 2) AS mean_signed_pct
 FROM ml.v_fact_vs_forecast
-WHERE record_type = 'historical'
+WHERE model_version = :'latest_version' AND record_type = 'historical'
 GROUP BY body_group_name
 ORDER BY mape_pct DESC;
 
@@ -38,7 +43,7 @@ SELECT CASE WHEN distance_km < 300 THEN '1: <300 km' WHEN distance_km < 1000 THE
        count(*) AS deals, round(avg(actual_price_rub)) AS mean_actual, round(avg(abs_error_rub)) AS mae_rub,
        round(avg(ape_pct), 2) AS mape_pct, round(avg(pct_error), 2) AS mean_signed_pct
 FROM ml.v_fact_vs_forecast
-WHERE record_type = 'historical'
+WHERE model_version = :'latest_version' AND record_type = 'historical'
 GROUP BY distance_band
 ORDER BY distance_band;
 
@@ -46,7 +51,7 @@ ORDER BY distance_band;
 SELECT date_trunc('week', loading_date)::date AS week, count(*) AS deals, round(avg(abs_error_rub)) AS mae_rub,
        round(avg(ape_pct), 2) AS mape_pct, round(avg(pct_error), 2) AS mean_signed_pct
 FROM ml.v_fact_vs_forecast
-WHERE record_type = 'historical'
+WHERE model_version = :'latest_version' AND record_type = 'historical'
 GROUP BY week
 ORDER BY week;
 
@@ -55,7 +60,8 @@ SELECT decile, count(*) AS deals, round(avg(predicted_price_rub)) AS mean_predic
        round(avg(actual_price_rub)) AS mean_actual,
        round(100 * (avg(predicted_price_rub) / avg(actual_price_rub) - 1), 2) AS over_prediction_pct
 FROM (SELECT *, ntile(10) OVER (ORDER BY predicted_price_rub) AS decile
-      FROM ml.v_fact_vs_forecast WHERE record_type = 'historical') AS ranked
+      FROM ml.v_fact_vs_forecast
+      WHERE model_version = :'latest_version' AND record_type = 'historical') AS ranked
 GROUP BY decile
 ORDER BY decile;
 
@@ -65,7 +71,7 @@ SELECT date_trunc('month', loading_date)::date AS loading_month, body_group_name
        round((percentile_cont(0.5) WITHIN GROUP (ORDER BY predicted_price_rub / distance_km))::numeric, 2)
            AS median_predicted_rub_per_km
 FROM ml.v_fact_vs_forecast
-WHERE record_type = 'future'
+WHERE model_version = :'latest_version' AND record_type = 'future'
 GROUP BY loading_month, body_group_name
 ORDER BY loading_month, deals DESC
 LIMIT 15;
@@ -75,7 +81,7 @@ SELECT record_type, count(*) AS deals, round(avg(actual_price_rub)) AS mean_actu
        round(avg(predicted_price_rub)) AS mean_predicted, round(avg(ape_pct), 2) AS mape_pct,
        min(loading_date) AS first_date, max(loading_date) AS last_date
 FROM ml.v_fact_vs_forecast
-WHERE origin_city = 'Москва' AND destination_city = 'Казань' AND body_group = 'TENT'
+WHERE model_version = :'latest_version' AND origin_city = 'Москва' AND destination_city = 'Казань' AND body_group = 'TENT'
 GROUP BY record_type
 ORDER BY record_type DESC;
 

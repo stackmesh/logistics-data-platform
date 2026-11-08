@@ -30,7 +30,7 @@ from etl.transform.normalize import transform_snapshot  # noqa: E402
 COLD_TRUNCATE = (
     "TRUNCATE raw.price_body_types, raw.price_dates, raw.prices, raw.cities, raw.body_types, "
     "raw.exchange_rates, core.bridge_deal_body_group, core.fact_deal_date, core.fact_deal, "
-    "core.dim_city, core.dim_exchange_rate, audit.quarantine_price"
+    "core.dim_city, core.dim_exchange_rate, audit.quarantine_price CASCADE"
 )
 
 
