@@ -13,7 +13,7 @@ The ETL passed every check in this audit:
 | Backfill | Overlapping windows do not multiply rows. Reloading an emptied range reproduces the full load exactly. |
 | Transaction safety | Failed, killed, and concurrent loads leave no partial data. |
 
-The automated suite has 103 tests and all of them pass.
+At the time of this audit the ETL suite had 103 tests and all of them passed. The whole platform suite, including the later mart, ML, and pipeline stages, now has 257 tests; see the README for the latest run.
 
 **Environment caveat.** Results come from PostgreSQL 17.11 running locally, with the same two databases, roles, and migrations that Docker Compose creates. Docker is not installed on the audit machine, so `docker compose --profile test run --rm tests` has not been executed here. The suite uses only environment variables, so the container runs the same tests.
 
@@ -216,14 +216,14 @@ Changes made during this audit:
 - **COPY sends chunks of Polars-rendered CSV** instead of writing one Python tuple per row. Staging COPY went from 6.3 s to 3.8 s. Float values round-trip exactly: reruns afterwards reported 0 raw updates.
 - **The load logs per-step timings** in each batch summary and in `audit.etl_batch.summary`.
 
-**Indexes.** None were added, because every merge predicate already has an index:
+**Indexes.** None were added. Most merge predicates already have an index; two deletes scan their table, and that is acceptable at this volume:
 
-| Merge predicate | Index |
+| Merge predicate | Access path |
 | --- | --- |
 | Staging keys | Primary key on each staging table |
-| Window deletes on fact | `fact_deal_loading_date_idx` |
+| Window deletes on fact | Sequential scan of `core.fact_deal` (about 46 ms for 299,797 rows). The predicate is `loading_date in window OR deal in this extract`, and the `OR EXISTS` branch prevents use of `fact_deal_loading_date_idx`. Splitting it into two deletes would make it index-driven if the table grows by orders of magnitude |
 | Window deletes on raw | `raw_prices_loading_date_idx` |
-| Window deletes on quarantine | `quarantine_price_loading_date_idx` |
+| Window deletes on quarantine | Sequential scan of `audit.quarantine_price` (203 rows), same `OR` shape as the fact delete |
 | Child deletes on raw links | `raw_price_body_types_price_idx` |
 | Child deletes on raw dates | `(price_id, price_date)` unique |
 | Child deletes on core dates and bridge | Primary keys |
@@ -246,7 +246,7 @@ The one plan regression found in Stage 3, a nested loop caused by stale statisti
 | `test_dq_edge_cases.py` | All requested edge cases through the real merge | 22 |
 | `test_core_schema.py`, `test_db_smoke.py` | Stage 1 and 2 contracts | 13 |
 
-Last full run: 103 passed in 2 min 42 s.
+Last full run of these modules during the audit: 103 passed in 2 min 42 s. The table covers the ETL modules only; the mart, ML, and pipeline modules are listed in the README.
 
 To run:
 

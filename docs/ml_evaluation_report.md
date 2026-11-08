@@ -209,7 +209,7 @@ Predictions range from 7,048.57 to 1,601,668.99 RUB, and none is zero or negativ
 | `model.cbm` | CatBoost model. The random `model_guid` is replaced by the model version and the wall-clock `train_finish_time` is removed, so retraining on the same data gives a byte-identical file |
 | `model_card.json` | Model name and version, library versions, seed, as_of, train, validation and test periods, training config, full CatBoost params, best and final iterations, feature list and order, categorical and numeric lists, feature definitions, frozen categorical vocabulary, row counts, data digests, core batch, validation/train/test metrics, baseline metrics, feature importance, model SHA-256 |
 | `baselines.pkl` | The fitted Ridge, DecisionTree and rate-per-km baselines |
-| `../latest.json` | Pointer to the version the scorer uses by default |
+| `../latest.json` | Pointer to the version the scorer uses by default. Written only after the registry row commits |
 
 The model version is `as_of` plus the first 12 hex digits of a SHA-256 over:
 - the training config;
@@ -234,7 +234,7 @@ Same data and config therefore give the same version. Changed data or config giv
 | Artifact reproducibility | Retraining gives the same version, the same model SHA-256 and the same metrics, on the real data and on a synthetic set. A tampered model file is rejected |
 | Feature ordering | `model.feature_names_` equals the card and the allow-list. Reordered columns are rejected by `predict` and `make_pool`. Load checks file order against the card |
 
-`tests/test_ml_model.py` has 19 tests and needs no database. `tests/test_ml_scoring.py` has 12 tests against the real warehouse.
+`tests/test_ml_model.py` has 19 tests and needs no database. `tests/test_ml_scoring.py` has 13 tests against the real warehouse, including the brief-named prediction mart view `mart.ml_price_predictions`.
 
 ## Limitations
 

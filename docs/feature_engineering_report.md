@@ -186,7 +186,7 @@ Unit tests cover the missing paths anyway: a null or blank full name, a null bod
 | `price_with_vat` | Not in the source schema. Banned by name and by the `vat` fragment |
 | `price / distance`, `price / total_weight` | No ratio is computed. `price_per_km`, `price_per_ton`, `price_km` and `km_price` are banned names |
 | `customer_cost`, `transportation_cost`, `profit`, `carrier_cost` | Not in the source schema. Banned by name and by the `cost`, `profit` and `margin` fragments |
-| `price_group_id`, `avg_price`, `min_km_price`, `max_km_price` | `price_group_stats` lives in `raw` only. The feature SQL does not read `raw` |
+| `price_group_id`, `avg_price`, `min_km_price`, `max_km_price` | `price_group_stats` is not extracted into the warehouse. The feature SQL reads only `core` |
 | `outlier_mark` | Used in the WHERE clause only |
 | `fx_rate`, `currency_code`, `nearest_rate_date` | Together with the source price they rebuild the target. Not selected |
 | Post-factum aggregates | None exist. Every feature is a function of its own row plus the frozen train vocabulary |
@@ -324,12 +324,11 @@ Weekly deal counts grow steadily in the synthetic snapshot. Weeks start on Monda
 
 Test covers 22 days but holds 35% of the population.
 
-## Differences from `docs/ml_design.md`
+## Notes on the design
 
-- **Column names** follow this stage's brief: `distance`, `total_weight`, `day_of_week`, `weekday_sin` and so on. The design used `distance_km`, `loading_isodow` and `dow_sin`. The definitions are the same.
-- **Storage:** the matrices are Parquet files plus metadata, not an `ml.deal_features` table. The `ml` schema stays empty until the model stage.
-- **Population:** the brief's filters are used as written. `price_type <> 6` from the design is implied by `is_fact`.
-- **Scope:** future deals (`score_future`) are not built yet. `FeaturePipeline.transform` takes any frame with the base columns and no target, so batch inference can reuse it.
+- **Storage:** the matrices are Parquet files plus metadata, not a warehouse table. Predictions, not features, are the published database output.
+- **Population:** the brief's filters are used as written. `price_type <> 6` is implied by `is_fact`.
+- **Future deals:** `FeaturePipeline.transform` takes any frame with the base columns and no target. Batch inference (`ml/scoring/score.py`) reuses it with the frozen train vocabulary. See [ml_design.md](ml_design.md).
 
 ## Out of scope
 

@@ -1,250 +1,188 @@
 # ML design
 
-Status: features implemented in `ml/features/`. See [feature_engineering_report.md](feature_engineering_report.md) for the implemented names, storage, and the differences from this design. Training and scoring are implemented in `ml/model/` and `ml/scoring/`; see [ml_evaluation_report.md](ml_evaluation_report.md). Implemented differences from this design: `random_seed = 42`; early stopping on the last 14 days of train, followed by a refit on all of train; the table is `ml.ml_price_predictions`, keyed by deal, model name, and model version. The mandatory model predicts the carrier-facing trip price in RUB without VAT, `y = price_rub`, for direct factual deals, and it scores future planned deals whose actuals must stay empty.
+The model predicts the carrier trip price in RUB without VAT, `y = price_rub`, for direct factual deals. It also scores planned future deals, whose actuals must stay empty.
 
-The research note's metric levels (R² near 0.93, MAPE near 13% for CatBoost) are orientation from another dataset. They are not acceptance thresholds for the synthetic snapshot. The run reports the metrics it measures.
+This document is the design contract. The measured results are in two reports:
 
-## 1. Population
+- [feature_engineering_report.md](feature_engineering_report.md): features, distributions, and the leakage audit;
+- [ml_evaluation_report.md](ml_evaluation_report.md): metrics, baselines, error analysis, and scoring runs.
 
-A core deal is a candidate when:
+The research note's metric levels (R² near 0.93, MAPE near 13% for CatBoost) come from another dataset. They are orientation, not acceptance thresholds, and this pipeline does not promise them.
 
-- it passed quality checks, so `price_rub` exists;
-- `complex = false`;
-- `distance_km > 0`;
-- `price_rub > 0`;
-- `price_type <> 6`.
+| Module | Role |
+|---|---|
+| `ml/features/spec.py` | Feature definitions, allow-list, ban list, fixed split windows, seed |
+| `ml/features/extract.py` | Population SQL for train/test and for future deals, over `core.fact_deal` ⋈ `core.dim_city` |
+| `ml/features/transform.py` | Row-wise feature values and `FeaturePipeline` (categorical vocabulary fitted on train only) |
+| `ml/features/dataset.py` | Split, fit, transform, leakage guard, Parquet + metadata (`python -m ml.features.dataset`) |
+| `ml/model/train.py` | CatBoost and baselines, artifacts, registry row (`python -m ml.model.train`) |
+| `ml/model/metrics.py`, `ml/model/baselines.py`, `ml/model/artifacts.py` | Metrics, Ridge / DecisionTree / rate-per-km baselines, model card and deterministic model file |
+| `ml/scoring/score.py` | Batch inference into `ml.ml_price_predictions` (`python -m ml.scoring.score`) |
+| `sql/ml/001_price_predictions.sql` | Registry, scoring audit, predictions table, upsert function, fact-versus-forecast views |
+| `sql/ml/002_prediction_mart.sql` | `mart.ml_price_predictions`, the brief-named prediction mart view |
 
-Candidates are then labeled:
+## 1. Population and temporal split
 
-| `split_role` | Predicate | Used for |
-| --- | --- | --- |
-| `train` | `is_fact` and `outlier_mark = false` and `loading_date >= 2026-07-26` and `loading_date < 2026-10-05` | Fit only |
-| `test` | `is_fact` and `outlier_mark = false` and `loading_date >= 2026-10-05` and `loading_date <= 2026-10-26` | Metrics and published actuals |
-| `score_future` | `loading_date > 2026-10-26`, under assumption A-SCORE, without an `is_fact` requirement beyond `price_type <> 6` | Published prediction, NULL actual and errors |
-| excluded | everything else that sits in core | Not written to `ml.deal_features` |
+`as_of = 2026-10-26` is the snapshot date. It is a constant in `SplitWindows`, never the run's system date.
 
-History before `2026-07-26` stays in the mart. It is not added to train. The research note's general remark about "earlier history" is superseded by the fixed window in the brief.
-
-`2026-10-05` is test, not train. `2026-10-26` is test, not future. `2026-10-27` is future.
-
-`outlier_mark` removes a row from train and test. It is not a column in the matrix. Deals created at or after `2026-10-26 02:30:00` keep whatever flag the source stored, including `false` on unmarked extremes. Those unmarked rows remain in test when their loading date is in the test window. That is a property of the snapshot, documented in the README at implementation time, and it is not "fixed" by a second outlier rule.
-
-Assumption A-SCORE: future rows must be direct, non-auction, quality-checked deals. Composite routes and auction bids are not scored. If this assumption is rejected, the future predicate becomes "every core deal with `loading_date > as_of`" and the feature query still has to define a body group and a distance.
+| Role | Predicate on core | Rows | Use |
+|---|---|---|---|
+| train | `is_fact AND NOT complex AND NOT outlier_mark AND price_rub > 0 AND distance_km > 0`, `loading_date ∈ [2026-07-26, 2026-10-05)` | 24,226 | Fit. The last 14 days, `[2026-09-21, 2026-10-05)`, are also the early-stopping validation window |
+| test | Same filters, `loading_date ∈ [2026-10-05, 2026-10-27)`, that is 2026-10-05 to 2026-10-26 inclusive | 12,808 | Metrics and historical predictions |
+| future | `loading_date > 2026-10-26 AND NOT complex AND price_type <> 6 AND distance_km > 0` | 4,891 | Predictions with NULL actuals |
 
 ```mermaid
 flowchart LR
-  subgraph axis ["loading_date"]
-    before["before 2026-07-26<br/>mart only"]
-    train["train<br/>2026-07-26 inclusive<br/>to 2026-10-05 exclusive"]
-    test["test<br/>2026-10-05 inclusive<br/>to 2026-10-26 inclusive"]
-    future["score_future<br/>after 2026-10-26"]
-  end
-  before --> train --> test --> future
+  before["before 2026-07-26<br/>mart only"] --> fit["fit<br/>07-26 .. 09-20"] --> val["validation<br/>09-21 .. 10-04"] --> test["test<br/>10-05 .. 10-26"] --> future["future<br/>after 10-26"]
 ```
 
-The split is a filter on `loading_date`. It is not `train_test_split(..., shuffle=True)` and it is not a random fold. The run date is irrelevant. A test that sets the system clock forward still has to produce these bounds.
+Split rules:
 
-## 2. Feature matrix
+- `2026-10-05` belongs to test only. `2026-10-26` is test, not future.
+- The split is a filter on `loading_date`. There is no `train_test_split`, no `shuffle`, no `sample`, and no K-fold.
+- Rows are ordered by `(loading_date, price_id)`. CatBoost runs with `has_time=True`, so even its internal ordered statistics follow time.
+- A test scans `ml/`, `orchestration/tasks.py`, and `orchestration/verify.py` for shuffle and clock calls.
 
-Features are selected in SQL and stored in `ml.deal_features`. Python trains on an explicit allow-list. Anything stored for audit (`price_rub`, `split_role`, `loading_date`, `batch_id`) is omitted from that list.
+Future membership:
 
-### 2.1 Geography
+- It does not depend on any price or price-derived flag; neither `is_fact` nor `outlier_mark` is used.
+- Every planned deal in the snapshot carries a source price, and the future query does not select it.
+- Five planned source deals have a non-positive price. The ETL quarantined them, so they never reached core and are not scored (see Known limitations in the README).
 
-From `core.dim_city` of the loading and unloading `gc_id`, using the minimum-`id` city:
+History before 2026-07-26 stays in the mart and is not used for training, as the brief's fixed window requires.
 
-- `origin_city_name`, `destination_city_name`
-- `origin_region_name`, `destination_region_name`
-- `origin_latitude`, `origin_longitude`, `destination_latitude`, `destination_longitude`
+## 2. Features
 
-City and region are separate categorical features. The route is not concatenated into one string. The research note calls out high-cardinality route strings as a sparsity problem and attributes about 30% of the lift to separate origin and destination geography. With 40 places, city cardinality is small; the columns are still separate because that is the stated encoding.
+There are 24 features: 7 categorical and 17 numeric. Every one is a function of its own row plus the frozen train vocabulary. There are no cross-row aggregates.
 
-Region text is the raw substring after the first comma (A-CITY). No dictionary of region aliases is applied, so `г. Москва` and `Свердловская обл.` stay as written on the winning city row.
+| Group | Features |
+|---|---|
+| Geography | `origin_city`, `destination_city`, `origin_region`, `destination_region` (from `core.dim_city.full_name_local`, split at the first comma); `origin_latitude`, `origin_longitude`, `destination_latitude`, `destination_longitude` |
+| Load and equipment | `distance`, `total_weight`, `total_volume`, `body_group`, `weight_category`, `volume_category` |
+| Calendar, from `loading_date` | `year`, `month`, `day_of_week` (ISO, Monday = 1), `day_of_year`; `month_sin/cos` (T = 12), `weekday_sin/cos` (T = 7), `day_of_year_sin/cos` (T = 365.25) |
 
-### 2.2 Load and equipment
-
-- `distance_km` — the stored distance, not a fresh haversine
-- `total_weight_t`, `total_volume_m3`
-- `body_group_code` — mapping of `prices.body_type`, or `UNSPECIFIED` (A-BODY-ML)
-- `weight_category`, `volume_category` — values after gap fill
-
-`distance_km` is the dominant numeric driver in the research note. It stays in original kilometres. The model is a tree model, so the mandatory path does not log-scale it.
-
-Secondary body-type links change the mart and do not create a second feature row. A deal linked to tent and board is trained once, with the group of its `body_type` column. Duplicating it would copy `price_rub` into two groups and pull the loss toward deals that happen to carry two types.
-
-### 2.3 Calendar
-
-From `loading_date`, not from `price_date` and not from `created_at`:
-
-| Feature | Definition |
-| --- | --- |
-| `loading_year` | calendar year |
-| `loading_month` | 1–12 |
-| `loading_isodow` | ISO day of week, Monday = 1 through Sunday = 7 |
-| `loading_doy` | day of year, 1–366 |
-| `month_sin`, `month_cos` | `sin(2π * loading_month / 12)`, `cos(2π * loading_month / 12)` |
-| `dow_sin`, `dow_cos` | `sin(2π * loading_isodow / 7)`, `cos(2π * loading_isodow / 7)` |
-| `doy_sin`, `doy_cos` | `sin(2π * loading_doy / 365.25)`, `cos(2π * loading_doy / 365.25)` |
-
-The year carries the inflation trend. The sine and cosine pairs keep December next to January and Sunday next to Monday. Day-of-year uses `365.25` in both leap and non-leap years, as specified. PostgreSQL `EXTRACT(DOW)` is not used, because its Sunday-zero numbering would disagree with a Python `weekday()` path. SQL and Python tests both assert ISO numbering.
-
-### 2.4 Allow-list
-
-```text
-distance_km
-total_weight_t
-total_volume_m3
-origin_city_name
-destination_city_name
-origin_region_name
-destination_region_name
-origin_latitude
-origin_longitude
-destination_latitude
-destination_longitude
-body_group_code
-weight_category
-volume_category
-loading_year
-loading_month
-loading_isodow
-loading_doy
-month_sin
-month_cos
-dow_sin
-dow_cos
-doy_sin
-doy_cos
-```
-
-Categorical columns for CatBoost: the six name and category columns (`origin_city_name`, `destination_city_name`, `origin_region_name`, `destination_region_name`, `body_group_code`, `weight_category`, `volume_category`). NULL region is a valid category level.
+- Origin and destination are encoded separately. There is no concatenated route string, because high-cardinality routes are sparse.
+- Cities come from the deduplicated `core.dim_city`, which keeps the smallest `cities.id` per `gc_id`.
+- `body_group` is the group of `prices.body_type`. A deal with several linked body types is trained once; it is not duplicated per group.
+- Categorical vocabularies for city and region are learned from train only:
+  - unseen values become `__UNKNOWN__`;
+  - nulls become `__MISSING__`.
+- Body group and the weight and volume categories use the fixed core domains.
+- Numeric values are as stored. No imputer or scaler is used for CatBoost. The Ridge baseline fits its scaler and one-hot encoder on train only.
 
 ## 3. Leakage controls
 
-```mermaid
-flowchart TB
-  target["Target price_rub"] --> ban["Banned as features"]
-  stats["price_group_stats<br/>built with the current deal"] --> ban
-  vat["VAT, margin, price per km, price per tonne"] --> ban
-  flag["outlier_mark"] --> filter["Row filter only"]
-  flag --> ban
-  future["Rows after as_of"] --> score["Scored"]
-  future --> history["Kept out of market history and out of fit"]
-  test["Test window"] --> metrics["Metrics"]
-  test --> fit["Kept out of fit and out of any encoder"]
-```
+| Banned input | Why | How it is kept out |
+|---|---|---|
+| `price`, `price_src`, `price_rub` | The target or its unconverted form | Target selected once and written only to `y`. Not in the allow-list |
+| `price_with_vat`, customer cost, margin, `carrier_cost` | Accounting identities with the target. Not in the source schema | Banned by name and by fragments `price`, `cost`, `profit`, `vat`, `margin` |
+| `price / distance`, `price / total_weight` | Unit prices of the deal being predicted | Never computed. `price_per_km`, `price_km`, and similar names are banned |
+| `price_group_stats.*`, `price_group_id` | Nightly aggregate that includes the predicted deal | Not extracted into the warehouse at all. The feature SQL reads only `core` |
+| `outlier_mark` | Used to clean the target. Must not be a feature | WHERE clause only |
+| `fx_rate`, `currency_code`, `nearest_rate_date` | With the source price they rebuild the target | Not selected |
+| Mart medians, MoM, YoY | The mart cell includes the deal's own month | Not read |
+| Encoders or statistics fitted on test or future | Temporal leakage | Vocabulary fitted on train. Early stopping uses the last 14 days of train, never test |
 
-Banned inputs, whether or not the column exists today:
+Enforcement:
 
-| Banned input | Why |
-| --- | --- |
-| `price`, `price_src`, `price_rub` as a feature | The target or its unconverted form |
-| `price_with_vat` | Direct rescaling of the target. Not in the source schema |
-| `price_rub / distance_km`, `price / distance`, `price_rub / total_weight_t` | Unit prices of the deal being predicted |
-| Customer cost, forwarder margin, `carrier_cost = transportation_cost - profit` | Accounting identity with the target. Not in the source schema |
-| `price_group_stats.avg_price`, `min_km_price`, `max_km_price` | Aggregates that include the row being predicted, on raw price |
-| `price_group_id` | Key into that aggregate |
-| `outlier_mark` | Used only to drop rows from the target population |
-| `fx_rate` | Together with the source price it reconstructs the target. The currency code is also omitted; the target is already RUB |
-| `organization_id`, `subscriber_id` | Not in the feature specification. High-cardinality identifiers can memorize who priced the deal |
-| Any mart median, `mom_pct`, or `yoy_pct` | The mart cell includes the deal's own month, and future cells are defined not to exist |
-| Statistics fitted on test or on future rows | Temporal leakage |
-
-`price_group_stats` remains in `raw` for the extract audit. The feature SQL, the training script, and `ml.deal_features` do not read it. A test fails if the feature column list intersects the ban list, and if any view in `ml` or `mart` depends on `raw.price_group_stats`.
-
-The mandatory model adds no rolling market features. A lag of last month's corridor would need a definition that excludes the current deal and uses only months before `loading_date`. The brief does not ask for that feature, and a careless version is the leakage pattern the research note describes. It is out of scope.
-
-Outlier fences, imputers, scalers, and target encoders are fit on `split_role = 'train'` only. The mandatory CatBoost path does not need an imputer or a scaler: required measures are non-null on core rows, and categoricals are native. The optional Ridge path, if implemented, one-hot encodes categoricals and fits `SimpleImputer` and `StandardScaler` on train, then applies the frozen transformers to test and future. Those transformers are not fit on a frame that still contains test rows.
-
-Early stopping does not use the test window. The mandatory run uses a fixed `iterations` value so there is no validation slice to leak through. If a later experiment uses early stopping, its validation rows are the latest part of train only, and the reported metrics stay on the untouched test window.
-
-Target transformation: trees are trained on `price_rub` in RUB, not on `ln(price_rub)`. The research note says the log does not improve tree metrics. Log fences are part of the optional outlier job, which is not in this pipeline.
+- `assert_no_leakage` runs on every matrix before anything is written. `make_pool` rejects any column outside the allow-list.
+- Tests prove that copying the target into 13 banned columns, or scrambling it, does not change the features.
+- The scorer stages only `(price_id, split_role, predicted_price_rub)`. `actual_price_rub` is filled in SQL from `core.fact_deal.price_rub`, and only when `split_role = 'test'`.
+- A check constraint on `ml.ml_price_predictions` makes a future row with an actual, an error, or a loading date on or before `as_of` impossible to store.
 
 ## 4. Training
 
 | Setting | Value |
-| --- | --- |
-| Estimator | `catboost.CatBoostRegressor` |
-| Loss | `RMSE` |
-| `random_seed` | `20261026` |
-| Iterations | 500, an engineering default, not a business requirement |
-| Learning rate and depth | CatBoost defaults, unless a recorded experiment changes them before the graded run |
-| Categorical features | the seven columns listed in section 2.4 |
-| Eval set | none in the mandatory run |
-| `allow_writing_files` | false, so the container does not depend on a CatBoost log directory |
+|---|---|
+| Estimator | `catboost.CatBoostRegressor`, native categorical features |
+| Loss / eval metric | RMSE / RMSE |
+| `random_seed` | 42. `RANDOM_SEED = 20261026` seeds Python and NumPy for the feature stage |
+| `depth`, `learning_rate`, `l2_leaf_reg` | 6, 0.05, 3.0 |
+| Iterations | Up to 3,000, with early stopping after 200 rounds without improvement on the validation window. The final model is refitted on all of train with `best_iteration + 1` trees (263) |
+| `has_time`, `thread_count`, `allow_writing_files` | true, 4, false |
+| Target | `price_rub` in RUB, not logged. The research note found that the log does not help trees |
 
-NumPy's generator is seeded with the same integer before the fit, for any shuffle CatBoost still performs inside a bootstrap. The data order passed to `fit` is `ORDER BY price_id` so a replay sees the same row order.
+Baselines use the same split, features, and rows:
 
-The optional comparison models are `sklearn.linear_model.Ridge` and `sklearn.tree.DecisionTreeRegressor`, same seed and same split. They are not required for acceptance. If they are trained, their predictions go to `ml.price_predictions` under their own `model_name` and do not overwrite `catboost_regressor`.
+- `Ridge` with one-hot encoding and standard scaling, fitted on train;
+- `DecisionTreeRegressor` with depth 12 and minimum leaf size 20;
+- the median RUB/km per body group, multiplied by distance.
 
-The fitted CatBoost file is written to the pipeline container's model volume as an artifact. The graded output is the database table, not the file. A scoring replay loads the artifact saved by that run. The first `docker compose up` trains and then scores in the same process.
+Artifacts go to `ml/artifacts/<model_version>/` (the `ml_models` volume in compose):
+
+- `model.cbm`, made deterministic: the random GUID is replaced by the version and the training timestamp is removed;
+- `model_card.json`;
+- `baselines.pkl`;
+- `../latest.json`, the pointer the scorer uses by default. It is written only after the registry row commits, so the scorer can never pick a version that the foreign key on `ml.ml_price_predictions` would reject.
+
+`model_version` is `as_of` plus 12 hex digits of a SHA-256 over the config, the feature spec, the split, the train data digests, and the CatBoost version. Retraining on the same data gives the same version and a byte-identical model file. `ml.ml_model_registry` gets one row per version.
 
 ## 5. Metrics
 
-Computed on test rows only, with `y` the actual `price_rub` and `ŷ` the prediction:
+Metrics are computed on test rows only, with `y` the actual `price_rub` and `ŷ` the prediction:
 
 | Metric | Definition |
-| --- | --- |
-| RMSE, RUB | square root of the mean squared error |
-| MAE, RUB | mean absolute error |
-| R² | one minus the residual sum of squares over the total sum of squares around the test mean |
-| MAPE, % | mean of `abs(y - ŷ) / y * 100` |
+|---|---|
+| R² | `1 − SS_res / SS_tot` around the test mean |
+| MAPE, % | mean of `abs(y − ŷ) / y × 100` over rows with `y > 0` (all test rows qualify) |
+| RMSE, RUB | `sqrt(mean((y − ŷ)²))` |
+| MAE, RUB | `mean(abs(y − ŷ))` |
 
-The test filter requires `y > 0`, so MAPE is defined. The implementation still refuses to divide by zero.
+Metrics are logged and stored in two places:
 
-These four numbers are printed in the run log and inserted into `ml.run_metrics`. R² on a single city pair is not a release metric. The research note explains why a thin slice can show a low R² with an acceptable MAPE. Route-level MAPE is not a mandatory output.
+- `model_card.json` and `ml.ml_model_registry.metrics`;
+- `audit.ml_scoring_batch.test_metrics` for each scoring batch.
+
+`ml.v_prediction_error_summary` recomputes them in SQL from the stored rounded predictions. An integration test asserts that both computations agree.
 
 ## 6. Batch scoring
 
-Input: `ml.deal_features` where `split_role IN ('test', 'score_future')`, ordered by `price_id`.
+1. The scorer loads `latest.json`, or `--model-version`. It verifies the model file's SHA-256 against the card and the feature order against the allow-list.
+2. It rebuilds test and future features with the frozen train vocabulary and predicts in one vectorized call per role.
+3. In one transaction under the core ETL advisory lock, it:
+   - COPYs `(price_id, split_role, predicted)` into a temp table;
+   - calls `ml.upsert_price_predictions(model, version, as_of, batch, roles)`;
+   - writes `audit.ml_scoring_batch` with counts, test metrics, and a future summary.
+4. On failure everything rolls back, and the batch row is marked `failed`.
 
-Output: upsert into `ml.price_predictions` for `model_name = 'catboost_regressor'`.
+Upsert behaviour:
+
+- The key is `(price_id, model_name, model_version)`.
+- A row is rewritten only when a stored value differs, so a repeat run reports 17,699 unchanged and leaves `scored_at` alone.
+- Rows of the scored roles that left the population are deleted. Other roles are untouched, which lets the pipeline score test and future as two tasks.
 
 | Column | Test | Future |
-| --- | --- | --- |
-| `actual_price_rub` | feature-table `price_rub` | NULL |
-| `predicted_price_rub` | model output as `numeric(18, 2)` | model output as `numeric(18, 2)` |
-| `abs_error_rub` | absolute difference | NULL |
-| `ape_pct` | absolute percentage error | NULL |
-| `scored_at` | transaction timestamp | transaction timestamp |
+|---|---|---|
+| `actual_price_rub` | `core.fact_deal.price_rub` | NULL, whatever the source price says |
+| `predicted_price_rub` | Model output, `numeric(18, 2)` | Model output, `numeric(18, 2)` |
+| `abs_error_rub`, `ape_pct` | Computed in SQL | NULL |
 
-The future branch does not read `core.fact_deal.price_src` when filling `actual_price_rub`. The column is set NULL in SQL, not "NULL if the source price is NULL".
+Train deals are not written to the predictions table. Fitted values on training rows would look like accuracy and are not the fact-versus-forecast comparison the brief asks for.
 
-Predictions for deals that are no longer in the scoring population are deleted for this `model_name`. Train deals are not written to the prediction table. The brief asks for the held-out period and the future applications, which is the fact-versus-forecast table. Filling it with training fitted values would look like accuracy and would not be the requested comparison.
+## 7. Fact versus forecast
 
-Idempotency: the same artifact and the same features produce the same `predicted_price_rub`. A second run replaces rows in place on `(price_id, model_name)`.
+| View | Contents |
+|---|---|
+| `ml.v_fact_vs_forecast` | One row per prediction: route and body names, distance, actual, predicted, signed and absolute error, APE, APE band, `record_type` (`historical` or `future`) |
+| `ml.v_prediction_error_summary` | Per model version and record type: R², MAE, RMSE, MAPE, bias, median and p90 APE, share within 10% and 20% |
+| `ml.v_prediction_error_distribution` | Historical deals per APE band |
+| `mart.ml_price_predictions` | The prediction mart under the brief's name and column list (`price_id`, `loading_date`, `loading_city_gcid`, `unloading_city_gcid`, `body_group`, `actual_price_rub`, `predicted_price_rub`, `abs_error_rub`, `ape_pct`, `model_name`, `scored_at`), plus `model_version` and `split_role` (`sql/ml/002_prediction_mart.sql`) |
 
-## 7. Acceptance criteria
-
-- Train minimum date is `2026-07-26`. Train contains no `2026-10-05`. Test contains `2026-10-05` and `2026-10-26` when such deals exist and pass filters. Future starts at `2026-10-27`.
-- A deal with `loading_date = 2026-07-25` is absent from `ml.deal_features`.
-- An outlier inside the train window is absent from `ml.deal_features`.
-- A complex deal and a type 6 deal inside the window are absent.
-- `ml.deal_features` column names and `ml.run_metrics.feature_columns` are equal to the allow-list. The intersection with the ban list is empty.
-- No SQL object in `ml` references `price_group_stats`.
-- For every `score_future` prediction, `actual_price_rub`, `abs_error_rub`, and `ape_pct` are NULL, including when `core.fact_deal.price_src` is not NULL.
-- For every test prediction, `actual_price_rub` equals `core.fact_deal.price_rub`, and both error columns are populated.
-- Two scoring runs with the same seed leave prediction values unchanged and add one `ml.run_metrics` row.
-- A unit test builds sine and cosine for 31 December and 1 January and checks the day-of-year pair is close, and builds Sunday = 7 and Monday = 1 and checks the day-of-week pair is close.
-- If Ridge is implemented, a test fits the scaler on a frame that includes a test-only category level and shows the test row was not part of `fit`.
+`sql/ml/fact_vs_forecast.sql` holds ten example queries over these views. Queries 3 to 9 are restricted to the most recently registered model version.
 
 ## 8. Reproducibility
 
 | Source of variation | Control |
-| --- | --- |
-| Synthetic snapshot | `setseed(0.20261026)` and `n_prices=300000` in init. The pipeline does not call `setseed` again |
-| Split | Literal dates in the feature SQL, parameterized by `AS_OF_DATE` whose default is `2026-10-26` |
-| Row order | `ORDER BY price_id` |
-| Model | `random_seed = 20261026`, fixed iterations |
-| Category boundaries | SQL `ROUND(numeric, 1)`, shared by ETL and features |
-| Cyclical fields | SQL expressions, asserted from Python |
-| Package versions | Pinned in the image requirements file at implementation time |
+|---|---|
+| Snapshot | `setseed(0.20261026)` and `n_prices = 300000` inside the unchanged `synthetic.sql` |
+| Split | Literal dates in `SplitWindows`. No clock |
+| Row order | `ORDER BY loading_date, price_id`. CatBoost `has_time=True` |
+| Model | Fixed seed, deterministic early stopping on a fixed window, deterministic model file |
+| Packages | `requirements.txt` plus `constraints.txt` with exact versions of every package |
 
-## 9. Out of the mandatory model
+## 9. Out of scope
 
-- Recalculated outlier filters, log-price fences, and prediction intervals.
-- Hyperparameter search.
-- A weekly forecast horizon or a market-index forecast like the locked panel in the demo.
-- Target encoding of city pairs.
-- Using `mart.route_card` as a feature.
-- Scoring `outlier_mark = true` rows "to see the error". They are outside the defined target.
-- Treating R² ≈ 0.93 or MAPE ≈ 13% as a pass gate on this synthetic draw.
+- Recomputed outlier rules, log-price fences, and prediction intervals.
+- Hyperparameter search, target encoding, and rolling market features (lagged corridor values would need a strictly past-only definition).
+- Using the mart as a feature.
+- Treating the research note's R² ≈ 0.93 or MAPE ≈ 13% as a pass gate.

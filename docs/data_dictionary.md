@@ -1,14 +1,15 @@
 # Data dictionary
 
-Status: design for approval. Physical types below are the warehouse contract. The source column types are the reference DDL.
+This dictionary describes the source snapshot and every warehouse object as built. Sections 2 to 7 are generated from the PostgreSQL catalog of a warehouse after a full pipeline run (`sql/core`, `sql/mart`, `sql/ml` applied), so types, keys, indexes, and constraints are the physical ones. Row counts are from the 300,000-deal snapshot; audit tables are append-only and their counts depend on how many runs happened.
 
 Conventions:
 
 - Grain is the business meaning of one row.
-- Primary keys are natural where the source already has a stable id. Surrogate keys are not added for deals.
-- `numeric` money and measures use half-away-from-zero rounding at the staging boundary (assumption A-TYPE, A-FX-1).
-- Foreign keys are enforced inside `logistics_dwh`. The source snapshot has only the foreign keys declared in `schema.sql`.
-- `as_of_date` is the parameter `2026-10-26`, stored on mart and ML rows so a result can be tied to the snapshot rather than to the run clock.
+- Deals keep their natural key (`prices.id` as `price_id`). No surrogate keys are added.
+- Core money and measures are `numeric`: prices to 0.01, FX rates to 0.000001, distance, weight, and volume to 0.001. Raw keeps the source `double precision`.
+- Every raw and core row carries lineage: `source_system`, `extracted_at` (source snapshot time), and `batch_id` (`audit.etl_batch`). Unchanged rows keep their original lineage on a rerun.
+- `as_of_date` (`2026-10-26`) is stored on mart and ML rows, so a result is tied to the snapshot, not to the run clock.
+- Foreign keys are enforced inside `logistics_dwh`. The source has only the foreign keys declared in `schema.sql`.
 
 ## 1. Source database `deals_bigdata`
 
@@ -72,7 +73,7 @@ Calendar: every day from `2023-06-01` through `2026-10-26` whose ISO day of week
 
 Measures (`avg_price`, `min_km_price`, `max_km_price`, `outliers_amount`, `clear_items_amount`) are computed from raw `price` and raw `price / distance`, including the deals being predicted. The group key is `prices.body_type`, not the collapsed many-to-many group, and the price is not `price_rub`.
 
-This table is forbidden as a model feature, including `price_group_id`. It is not a source for the mart.
+This table is forbidden as a model feature, including `price_group_id`. It is not a source for the mart, and the ETL does not extract it.
 
 ### 1.6 `public.prices`
 
@@ -106,7 +107,7 @@ Important columns:
 | `is_fact` | Generator sets `price_type IN (1, 2, 3, 4, 5, 9)` |
 | `nearest_rate_date` | `MAX(setting_date)` on the RUB calendar with `setting_date <= created_at`, or NULL when `r_cx > 0.995` |
 | `outlier_mark` | True only for facts whose random draw is in the outer 1% of each tail and whose `created_at` is before `2026-10-26 02:30:00` |
-| `weight_category`, `volume_category` | Filled by the generator. ETL fills only NULLs (A-CAT) |
+| `weight_category`, `volume_category` | Filled by the generator. The ETL keeps valid values and recomputes NULL or invalid ones (A-CAT) |
 | `source` | `data-hub`, `shippers-api`, `sbt`, or NULL for historical types 4 and 5 |
 
 `price_type` roles:
@@ -171,423 +172,880 @@ Not an input to `carriers_count` or to the model. Not landed.
 
 Product context for a future workplace. Not part of the mandatory mart. Not landed.
 
-## 2. Warehouse database `logistics_dwh`
+## 2. Raw (`raw`)
 
-### 2.1 `raw.load_batch`
+### 2.1 `raw.body_types`
+
+One source body type. Business grouping is applied in core, not here.
 
 | | |
 | --- | --- |
-| Grain | One pipeline run |
-| Primary key | `batch_id bigint` |
-| Foreign keys | None |
-| Indexes | Primary key; `(started_at)` |
+| Grain | One source `body_types` row |
+| Rows after the full load and pipeline run | 19 |
+| Primary key | `(id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
 
-Columns: `started_at`, `finished_at`, `mode` (`full` or `window`), `start_date`, `end_date`, `as_of_date`, `status`, `rows_read`, `rows_landed`, `rows_quarantined`, `rows_core`, `rows_mart`, `rows_scored`, `error_message`.
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `bigint` | no |  |
+| `name` | `character varying(255)` | no |  |
+| `id_from_1c` | `integer` | no |  |
+| `std_id` | `integer` | yes |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
 
 ### 2.2 `raw.cities`
 
-| | |
-| --- | --- |
-| Grain | One source `cities` row from the latest full reference load |
-| Primary key | `id` (source `cities.id`) |
-| Foreign keys | None |
-| Indexes | Primary key; `(gc_id, id)` |
-
-Columns: source columns plus `batch_id`. Duplicates of `gc_id` are preserved here. Deduplication happens in `core.dim_city`.
-
-### 2.3 `raw.body_types`
+One source cities row. gc_id is not unique here; core.dim_city keeps the minimum id.
 
 | | |
 | --- | --- |
-| Grain | One source body type |
-| Primary key | `id` |
-| Foreign keys | None |
-| Indexes | Primary key |
+| Grain | One source `cities` row (duplicate `gc_id` rows kept) |
+| Rows after the full load and pipeline run | 42 |
+| Primary key | `(id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
+| Indexes | `raw_cities_gc_id_id_idx` (gc_id, id) |
 
-Columns: `id`, `name`, `id_from_1c`, `std_id`, `batch_id`.
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `bigint` | no |  |
+| `full_name_local` | `character varying(255)` | no |  |
+| `full_name_gc` | `character varying(255)` | no |  |
+| `gc_id` | `integer` | no |  |
+| `name` | `character varying(255)` | no |  |
+| `longitude` | `double precision` | yes |  |
+| `latitude` | `double precision` | yes |  |
+| `created_at` | `timestamp(0) without time zone` | yes |  |
+| `updated_at` | `timestamp(0) without time zone` | yes |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
 
-### 2.4 `raw.exchange_rates`
+### 2.3 `raw.exchange_rates`
 
-| | |
-| --- | --- |
-| Grain | One source rate row |
-| Primary key | `id` |
-| Foreign keys | None |
-| Indexes | Primary key; `(num_code, setting_date, id DESC)` |
-
-Columns: `id`, `num_code`, `value`, `setting_date`, `batch_id`.
-
-### 2.5 `raw.prices`
-
-| | |
-| --- | --- |
-| Grain | One source deal, including deals that fail quality checks |
-| Primary key | `id` (source `prices.id`) |
-| Foreign keys | None inside `raw`. `price_group_id` is stored and not referenced |
-| Indexes | Primary key; `(GREATEST` is not indexed — instead `(created_at)`, `(updated_at)`, `(loading_date)`) |
-
-All source deal columns are landed, plus `batch_id` and `loaded_at`. This table is the evidence that a rejected row was not dropped on extract. Downstream facts are built from staging, not by editing this table in place.
-
-### 2.6 `raw.price_body_types`
+Source rate rows. The source has no unique key on currency and date.
 
 | | |
 | --- | --- |
-| Grain | One source link row for a deal that has been landed |
-| Primary key | `id` |
-| Foreign keys | `price_id` → `raw.prices.id` |
-| Indexes | Primary key; unique `(price_id, body_type_id)`; `(price_id)` |
+| Grain | One source `exchange_rates` row |
+| Rows after the full load and pipeline run | 2,664 |
+| Primary key | `(id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
+| Indexes | `raw_exchange_rates_lookup_idx` (num_code, setting_date, id DESC) |
 
-### 2.7 `raw.price_dates`
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `bigint` | no |  |
+| `num_code` | `character varying(255)` | no |  |
+| `value` | `double precision` | no |  |
+| `setting_date` | `date` | no |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
 
-| | |
-| --- | --- |
-| Grain | One source monthly date for a landed deal |
-| Primary key | `id` |
-| Foreign keys | `price_id` → `raw.prices.id` |
-| Indexes | Primary key; unique `(price_id, price_date)`; `(price_date)`; `(price_id)` |
-
-The source has no `price_date` index. The warehouse adds one because the mart predicate is on this column.
-
-### 2.8 `raw.price_group_stats`
-
-| | |
-| --- | --- |
-| Grain | One source statistics cell |
-| Primary key | `id` |
-| Foreign keys | None |
-| Indexes | Primary key |
-
-Landed so a lineage test can show that `core`, `mart`, and `ml` contain no view or foreign key that reads it. No query outside the extract step is allowed to reference `raw.price_group_stats` or `deals_bigdata.public.price_group_stats`.
-
-## 3. Data quality
-
-### 3.1 `dq.quarantine_prices`
+### 2.4 `raw.price_body_types`
 
 | | |
 | --- | --- |
-| Grain | One reason for one deal in the current rejected set |
-| Primary key | `(price_id, reason_code)` |
-| Foreign keys | None to `core`. `batch_id` → `raw.load_batch.batch_id` |
-| Indexes | Primary key; `(reason_code)`; `(batch_id)` |
+| Grain | One source body-type link of a landed deal |
+| Rows after the full load and pipeline run | 325,131 |
+| Primary key | `(id)` |
+| Unique | `(price_id, body_type_id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)`<br>`(price_id) REFERENCES raw.prices(id) ON DELETE CASCADE` |
+| Indexes | `raw_price_body_types_price_idx` (price_id) |
 
-Columns: `price_id`, `reason_code`, `batch_id`, `detected_at`, `created_at`, `loading_date`, `loading_city_gcid`, `unloading_city_gcid`, `distance`, `total_weight`, `total_volume`, `price`, `currency_code`, `nearest_rate_date`, `price_type`, `is_fact`.
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `bigint` | no |  |
+| `price_id` | `bigint` | no |  |
+| `body_type_id` | `integer` | no |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
 
-`reason_code` is one of `PRICE_NON_POSITIVE`, `RUB_PRICE_LE_1000`, `DISTANCE_NON_POSITIVE`, `WEIGHT_NEGATIVE`, `VOLUME_NEGATIVE`, `ORIGIN_CITY_NOT_FOUND`, `DESTINATION_CITY_NOT_FOUND`, `FX_RATE_MISSING`, `CURRENCY_UNSUPPORTED`.
-
-A replay deletes quarantine rows for processed deal ids and inserts the current set. The table is the current reject list, not an append-only history. History of counts is `dq.batch_log`.
-
-### 3.2 `dq.batch_log`
+### 2.5 `raw.price_dates`
 
 | | |
 | --- | --- |
-| Grain | One run's reject counts by reason |
+| Grain | One source price date of a landed deal |
+| Rows after the full load and pipeline run | 336,802 |
+| Primary key | `(id)` |
+| Unique | `(price_id, price_date)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)`<br>`(price_id) REFERENCES raw.prices(id) ON DELETE CASCADE` |
+| Indexes | `raw_price_dates_price_date_idx` (price_date) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `bigint` | no |  |
+| `price_id` | `bigint` | no |  |
+| `price_date` | `date` | no |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
+
+### 2.6 `raw.prices`
+
+One source deal, including rows that later fail quality checks.
+
+| | |
+| --- | --- |
+| Grain | One source deal in a loaded window, accepted or rejected |
+| Rows after the full load and pipeline run | 300,000 |
+| Primary key | `(id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
+| Indexes | `raw_prices_batch_idx` (batch_id)<br>`raw_prices_created_at_idx` (created_at)<br>`raw_prices_loading_date_idx` (loading_date)<br>`raw_prices_updated_at_idx` (updated_at) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `bigint` | no | Source prices.id. |
+| `created_at` | `timestamp(0) without time zone` | yes |  |
+| `updated_at` | `timestamp(0) without time zone` | yes |  |
+| `subscriber_id` | `integer` | yes |  |
+| `organization_id` | `integer` | yes |  |
+| `loading_date` | `date` | no |  |
+| `loading_city_gcid` | `integer` | no |  |
+| `unloading_city_gcid` | `integer` | no |  |
+| `distance` | `double precision` | no |  |
+| `total_weight` | `double precision` | no |  |
+| `total_volume` | `double precision` | no |  |
+| `body_type` | `integer` | yes |  |
+| `price` | `double precision` | no |  |
+| `currency_code` | `character varying(3)` | no |  |
+| `complex` | `boolean` | no |  |
+| `price_type` | `smallint` | no |  |
+| `item_id` | `integer` | yes |  |
+| `is_fact` | `boolean` | no |  |
+| `nearest_rate_date` | `date` | yes |  |
+| `meta_item_id` | `bigint` | yes |  |
+| `end_loading_date` | `date` | yes |  |
+| `source` | `character varying(255)` | yes |  |
+| `external_item_uuid` | `uuid` | yes |  |
+| `outlier_mark` | `boolean` | no |  |
+| `weight_category` | `character varying(4)` | yes |  |
+| `volume_category` | `character varying(4)` | yes |  |
+| `price_group_id` | `bigint` | yes | Source key only. No foreign key, and core does not carry this column. |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
+
+## 3. Core DWH (`core`)
+
+### 3.1 `core.bridge_deal_body_group`
+
+One business group per deal. Child types that share a group do not add another row.
+
+| | |
+| --- | --- |
+| Grain | One accepted deal and business body group |
+| Rows after the full load and pipeline run | 335,077 |
+| Primary key | `(price_id, body_group_code)` |
+| Foreign keys | `(body_group_code) REFERENCES core.dim_body_group(body_group_code)`<br>`(price_id) REFERENCES core.fact_deal(price_id) ON DELETE CASCADE` |
+| Indexes | `bridge_deal_body_group_group_idx` (body_group_code, price_id) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `price_id` | `bigint` | no |  |
+| `body_group_code` | `text` | no |  |
+| `resolution` | `text` | no |  |
+
+Check constraints:
+
+- `bridge_deal_body_group_resolution_check`: `((resolution = ANY (ARRAY['links'::text, 'fallback_body_type'::text, 'unspecified'::text])))`
+
+### 3.2 `core.dim_body_group`
+
+Tent 56, refrigerator 4, isotherm 2, flatbed 15, other, and not specified.
+
+| | |
+| --- | --- |
+| Grain | One business body group (6 rows, seeded by migration) |
+| Rows after the full load and pipeline run | 6 |
+| Primary key | `(body_group_code)` |
+| Unique | `(body_group_name)` |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `body_group_code` | `text` | no |  |
+| `body_group_name` | `text` | no |  |
+| `std_id` | `integer` | yes |  |
+
+Check constraints:
+
+- `dim_body_group_code_check`: `((body_group_code = ANY (ARRAY['TENT'::text, 'REF'::text, 'ISO'::text, 'BORT'::text, 'OTHER'::text, 'UNSPECIFIED'::text])))`
+- `dim_body_group_std_check`: `((((body_group_code = 'TENT'::text) AND (std_id = 56)) OR ((body_group_code = 'REF'::text) AND (std_id = 4)) OR ((body_group_code = 'ISO'::text) AND (std_id = 2)) OR ((body_group_code = 'BORT'::text) AND (std_id = 15)) OR ((body_group_code = ANY (ARRAY['OTHER'::text, 'UNSPECIFIED'::text])) AND (std_id IS NULL))))`
+
+### 3.3 `core.dim_body_type`
+
+One source body type id, including child ids, mapped to exactly one business group.
+
+| | |
+| --- | --- |
+| Grain | One source body type, plus ids inferred from deals |
+| Rows after the full load and pipeline run | 19 |
+| Primary key | `(body_type_id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)`<br>`(body_group_code) REFERENCES core.dim_body_group(body_group_code)` |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `body_type_id` | `integer` | no |  |
+| `name` | `text` | no |  |
+| `id_from_1c` | `integer` | no |  |
+| `source_std_id` | `integer` | yes |  |
+| `body_group_code` | `text` | no |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | yes |  |
+| `batch_id` | `bigint` | yes |  |
+
+Check constraints:
+
+- `dim_body_type_group_check`: `((body_group_code = core.body_group_for_type(body_type_id)))`
+
+### 3.4 `core.dim_city`
+
+One row per gc_id. source_city_id is the smallest source cities.id for that code.
+
+| | |
+| --- | --- |
+| Grain | One place (`gc_id`), from the smallest source `cities.id` |
+| Rows after the full load and pipeline run | 40 |
+| Primary key | `(gc_id)` |
+| Unique | `(source_city_id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
+| Indexes | `dim_city_batch_idx` (batch_id) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `gc_id` | `integer` | no |  |
+| `source_city_id` | `bigint` | no |  |
+| `name` | `text` | no |  |
+| `full_name_local` | `text` | no |  |
+| `region_name` | `text` | yes | Text after the first comma of the winning full_name_local. NULL when there is no comma. |
+| `latitude` | `double precision` | yes |  |
+| `longitude` | `double precision` | yes |  |
+| `duplicate_count` | `integer` | no |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
+
+Check constraints:
+
+- `dim_city_duplicate_count_check`: `((duplicate_count >= 1))`
+
+### 3.5 `core.dim_exchange_rate`
+
+One rate per currency and setting date. Duplicate source rows keep the greatest source id.
+
+| | |
+| --- | --- |
+| Grain | One currency and setting date |
+| Rows after the full load and pipeline run | 2,664 |
+| Primary key | `(currency_code, rate_date)` |
+| Unique | `(source_rate_id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
+| Indexes | `dim_exchange_rate_batch_idx` (batch_id) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `currency_code` | `character(3)` | no |  |
+| `rate_date` | `date` | no |  |
+| `rate_value` | `numeric(18,6)` | no |  |
+| `source_rate_id` | `bigint` | no |  |
+| `source_system` | `text` | no |  |
+| `extracted_at` | `timestamp with time zone` | no |  |
+| `batch_id` | `bigint` | no |  |
+
+Check constraints:
+
+- `dim_exchange_rate_currency_check`: `((currency_code = ANY (ARRAY['643'::bpchar, '840'::bpchar, '978'::bpchar])))`
+- `dim_exchange_rate_value_check`: `((rate_value > (0)::numeric))`
+
+### 3.6 `core.fact_deal`
+
+One validated deal per source prices.id. Auctions, outliers, and future dates remain here.
+
+| | |
+| --- | --- |
+| Grain | One accepted deal (`prices.id`) |
+| Rows after the full load and pipeline run | 299,797 |
+| Primary key | `(price_id)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)`<br>`(body_group_code) REFERENCES core.dim_body_group(body_group_code)`<br>`(body_type_id) REFERENCES core.dim_body_type(body_type_id)`<br>`(currency_code, fx_rate_date) REFERENCES core.dim_exchange_rate(currency_code, rate_date)`<br>`(loading_city_gcid) REFERENCES core.dim_city(gc_id)`<br>`(unloading_city_gcid) REFERENCES core.dim_city(gc_id)` |
+| Indexes | `fact_deal_batch_idx` (batch_id)<br>`fact_deal_created_at_idx` (created_at)<br>`fact_deal_loading_date_idx` (loading_date)<br>`fact_deal_population_idx` (is_fact, complex, outlier_mark, loading_date)<br>`fact_deal_route_idx` (loading_city_gcid, unloading_city_gcid)<br>`fact_deal_updated_at_idx` (updated_at) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `price_id` | `bigint` | no | Source prices.id. |
+| `loading_date` | `date` | no |  |
+| `end_loading_date` | `date` | yes |  |
+| `loading_city_gcid` | `integer` | no |  |
+| `unloading_city_gcid` | `integer` | no |  |
+| `distance_km` | `numeric(12,3)` | no |  |
+| `total_weight_t` | `numeric(12,3)` | no |  |
+| `total_volume_m3` | `numeric(12,3)` | no |  |
+| `body_type_id` | `integer` | yes |  |
+| `body_group_code` | `text` | no | Group of prices.body_type, or UNSPECIFIED when that column is null. |
+| `weight_category` | `character varying(4)` | no |  |
+| `volume_category` | `character varying(4)` | no |  |
+| `weight_category_imputed` | `boolean` | no |  |
+| `volume_category_imputed` | `boolean` | no |  |
+| `price_src` | `numeric(18,2)` | no | Original trip price in currency_code, without VAT. |
+| `currency_code` | `character(3)` | no |  |
+| `fx_rate` | `numeric(18,6)` | no |  |
+| `nearest_rate_date` | `date` | yes | Source prices.nearest_rate_date, unchanged. |
+| `price_rub` | `numeric(18,2)` | no | price_src converted with fx_rate, in RUB without VAT. |
+| `price_type` | `smallint` | no |  |
+| `is_fact` | `boolean` | no |  |
+| `complex` | `boolean` | no |  |
+| `outlier_mark` | `boolean` | no |  |
+| `organization_id` | `integer` | yes |  |
+| `subscriber_id` | `integer` | yes |  |
+| `created_at` | `timestamp(0) without time zone` | yes |  |
+| `updated_at` | `timestamp(0) without time zone` | yes |  |
+| `source_name` | `character varying(255)` | yes |  |
+| `item_id` | `integer` | yes |  |
+| `meta_item_id` | `bigint` | yes |  |
+| `external_item_uuid` | `uuid` | yes |  |
+| `source_system` | `text` | no | Originating database, deals_bigdata. |
+| `extracted_at` | `timestamp with time zone` | no | Warehouse extraction timestamp for this version of the row. |
+| `batch_id` | `bigint` | no | audit.etl_batch that published this version. |
+| `fx_rate_date` | `date` | yes | Exchange-rate date used for conversion. Equals nearest_rate_date for USD and EUR, NULL for RUB. |
+
+Check constraints:
+
+- `fact_deal_body_group_check`: `((((body_type_id IS NULL) AND (body_group_code = 'UNSPECIFIED'::text)) OR ((body_type_id IS NOT NULL) AND (body_group_code = core.body_group_for_type(body_type_id)))))`
+- `fact_deal_currency_check`: `((currency_code = ANY (ARRAY['643'::bpchar, '840'::bpchar, '978'::bpchar])))`
+- `fact_deal_distance_check`: `((distance_km > (0)::numeric))`
+- `fact_deal_fx_check`: `((((currency_code = '643'::bpchar) AND (fx_rate = (1)::numeric) AND (fx_rate_date IS NULL)) OR ((currency_code = ANY (ARRAY['840'::bpchar, '978'::bpchar])) AND (fx_rate_date IS NOT NULL) AND (fx_rate_date = nearest_rate_date))))`
+- `fact_deal_fx_rate_check`: `((fx_rate > (0)::numeric))`
+- `fact_deal_price_rub_check`: `((price_rub > (0)::numeric))`
+- `fact_deal_price_src_check`: `((price_src > (0)::numeric))`
+- `fact_deal_price_type_check`: `((price_type = ANY (ARRAY[1, 2, 3, 4, 5, 6, 9])))`
+- `fact_deal_volume_category_check`: `(((volume_category)::text = ANY ((ARRAY['FTL'::character varying, 'OTH'::character varying])::text[])))`
+- `fact_deal_volume_check`: `((total_volume_m3 >= (0)::numeric))`
+- `fact_deal_weight_category_check`: `(((weight_category)::text = ANY ((ARRAY['G20T'::character varying, 'FTL'::character varying, '10T'::character varying, '5T'::character varying, 'L5T'::character varying, 'OTH'::character varying])::text[])))`
+- `fact_deal_weight_check`: `((total_weight_t >= (0)::numeric))`
+
+### 3.7 `core.fact_deal_date`
+
+One source price_dates row of a conformed deal. price_month is the first day of that month.
+
+| | |
+| --- | --- |
+| Grain | One price date of an accepted deal |
+| Rows after the full load and pipeline run | 336,576 |
+| Primary key | `(price_id, price_date)` |
+| Foreign keys | `(price_id) REFERENCES core.fact_deal(price_id) ON DELETE CASCADE` |
+| Indexes | `fact_deal_date_month_idx` (price_month)<br>`fact_deal_date_month_price_idx` (price_month, price_id) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `price_id` | `bigint` | no |  |
+| `price_date` | `date` | no |  |
+| `price_month` | `date` | yes |  |
+
+## 4. Audit and data quality (`audit`)
+
+### 4.1 `audit.dq_quarantine_prices` (view)
+
+Rejected source deals, one row per deal and failed rule. Read-only view over audit.quarantine_price.
+
+| | |
+| --- | --- |
+| Grain | Same as `audit.quarantine_price` (brief name) |
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `price_id` | `bigint` |  |
+| `reason_code` | `text` |  |
+| `reason_detail` | `text` |  |
+| `loading_date` | `date` |  |
+| `loading_city_gcid` | `integer` |  |
+| `unloading_city_gcid` | `integer` |  |
+| `distance` | `double precision` |  |
+| `total_weight` | `double precision` |  |
+| `total_volume` | `double precision` |  |
+| `price` | `double precision` |  |
+| `currency_code` | `character varying(3)` |  |
+| `nearest_rate_date` | `date` |  |
+| `price_type` | `smallint` |  |
+| `is_fact` | `boolean` |  |
+| `created_at` | `timestamp(0) without time zone` |  |
+| `batch_id` | `bigint` |  |
+| `rejected_at` | `timestamp with time zone` |  |
+| `source_system` | `text` |  |
+| `source_record` | `jsonb` |  |
+
+### 4.2 `audit.bootstrap`
+
+| | |
+| --- | --- |
+| Grain | One row: container initialization finished |
+| Primary key | `(id)` |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `id` | `smallint` | no |  |
+| `initialized_at` | `timestamp with time zone` | no |  |
+| `source_database` | `text` | no |  |
+| `source_price_count` | `bigint` | no |  |
+| `n_prices_requested` | `bigint` | no |  |
+| `server_version` | `text` | no |  |
+
+Check constraints:
+
+- `bootstrap_id_check`: `((id = 1))`
+- `bootstrap_n_prices_requested_check`: `((n_prices_requested > 0))`
+- `bootstrap_source_price_count_check`: `((source_price_count >= 0))`
+
+### 4.3 `audit.dq_statistic`
+
+Reject counts by reason for one batch, including zeros.
+
+| | |
+| --- | --- |
+| Grain | One batch and reason code |
 | Primary key | `(batch_id, reason_code)` |
-| Foreign keys | `batch_id` → `raw.load_batch.batch_id` |
-| Indexes | Primary key |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
 
-Columns: `rows_rejected`, `logged_at`. A reason with zero rows is still written, so a silent rule failure is visible. Append-only.
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `batch_id` | `bigint` | no |  |
+| `reason_code` | `text` | no |  |
+| `rows_rejected` | `bigint` | no |  |
+| `logged_at` | `timestamp with time zone` | no |  |
 
-## 4. Staging
+Check constraints:
 
-Staging tables are truncated at the beginning of each run. They have primary keys so a bad join fails inside the run. They have no foreign keys to `core`.
+- `dq_statistic_reason_check`: `((reason_code = ANY (ARRAY['PRICE_NON_POSITIVE'::text, 'RUB_PRICE_LE_1000'::text, 'DISTANCE_NON_POSITIVE'::text, 'WEIGHT_NEGATIVE'::text, 'VOLUME_NEGATIVE'::text, 'ORIGIN_CITY_NOT_FOUND'::text, 'DESTINATION_CITY_NOT_FOUND'::text, 'CURRENCY_UNSUPPORTED'::text, 'FX_RATE_MISSING'::text])))`
+- `dq_statistic_rows_check`: `((rows_rejected >= 0))`
 
-### 4.1 `staging.price_candidate`
+### 4.4 `audit.etl_batch`
 
-| | |
-| --- | --- |
-| Grain | One deal that passed every quality rule, after FX and category fill, before core publish |
-| Primary key | `price_id` |
-| Foreign keys | None |
-| Indexes | Primary key; `(loading_date)` |
-
-Carries the conformed measures: `price_rub`, `fx_rate`, `fx_rate_date`, resolved categories, imputed flags, and `ml_body_group_code` from `prices.body_type` (A-BODY-ML). Deals in quarantine are absent.
-
-### 4.2 `staging.price_body_group`
+One pipeline execution. Source extracts, quarantine, and core rows point here.
 
 | | |
 | --- | --- |
-| Grain | One business body group for one surviving deal |
-| Primary key | `(price_id, body_group_code)` |
-| Foreign keys | None |
-| Indexes | Primary key |
+| Grain | One ETL batch attempt |
+| Primary key | `(batch_id)` |
+| Indexes | `etl_batch_started_at_idx` (started_at) |
 
-Columns: `body_group_code`, `resolution` (`links`, `fallback_body_type`, `unspecified`). This is the mart bridge input. It can contain more than one group per deal. `staging.price_candidate.ml_body_group_code` can name a group that is also in this table; the model still emits one row.
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `batch_id` | `bigint` | no |  |
+| `source_system` | `text` | no |  |
+| `mode` | `text` | no |  |
+| `status` | `text` | no |  |
+| `start_date` | `date` | yes | Inclusive prices.loading_date lower bound. NULL for a full load. |
+| `end_date` | `date` | yes | Inclusive prices.loading_date upper bound. NULL for a full load. |
+| `as_of_date` | `date` | yes |  |
+| `started_at` | `timestamp with time zone` | no |  |
+| `completed_at` | `timestamp with time zone` | yes |  |
+| `error_message` | `text` | yes |  |
+| `extracted_count` | `bigint` | yes |  |
+| `accepted_count` | `bigint` | yes |  |
+| `rejected_count` | `bigint` | yes |  |
+| `inserted_count` | `bigint` | yes | core.fact_deal rows inserted by this batch. |
+| `updated_count` | `bigint` | yes | core.fact_deal rows whose values changed in this batch. |
+| `unchanged_count` | `bigint` | yes |  |
+| `deleted_count` | `bigint` | yes | core.fact_deal rows removed because they left the window or failed checks. |
+| `summary` | `jsonb` | yes | Full execution summary: per-layer counts, reason counts, and timings. |
 
-### 4.3 `staging.price_date`
+Check constraints:
 
-| | |
-| --- | --- |
-| Grain | One source `price_date` of a surviving deal |
-| Primary key | `(price_id, price_date)` |
-| Foreign keys | None |
-| Indexes | Primary key; `(price_month)` |
+- `etl_batch_completed_check`: `((((status = 'running'::text) AND (completed_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])) AND (completed_at IS NOT NULL) AND (completed_at >= started_at))))`
+- `etl_batch_counts_check`: `((((extracted_count IS NULL) OR (extracted_count >= 0)) AND ((accepted_count IS NULL) OR (accepted_count >= 0)) AND ((rejected_count IS NULL) OR (rejected_count >= 0)) AND ((inserted_count IS NULL) OR (inserted_count >= 0)) AND ((updated_count IS NULL) OR (updated_count >= 0)) AND ((unchanged_count IS NULL) OR (unchanged_count >= 0)) AND ((deleted_count IS NULL) OR (deleted_count >= 0))))`
+- `etl_batch_mode_check`: `((mode = ANY (ARRAY['full'::text, 'window'::text])))`
+- `etl_batch_status_check`: `((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])))`
+- `etl_batch_window_check`: `((((mode = 'full'::text) AND (start_date IS NULL) AND (end_date IS NULL)) OR ((mode = 'window'::text) AND (start_date IS NOT NULL) AND (end_date IS NOT NULL) AND (start_date <= end_date))))`
 
-Columns: `price_date`, `price_month` as `date_trunc('month', price_date)::date`. Future dates are kept here and in core. The mart filter applies later, so a core reload can rebuild history without reinterpreting the source.
-
-## 5. Core
-
-### 5.1 `core.dim_city`
-
-| | |
-| --- | --- |
-| Grain | One `gc_id` |
-| Primary key | `gc_id` |
-| Foreign keys | None |
-| Indexes | Primary key; unique `(source_city_id)` |
-
-Columns: `gc_id`, `source_city_id` (the winning `cities.id`), `name`, `full_name_local`, `region_name`, `latitude`, `longitude`, `duplicate_count`, `batch_id`.
-
-Winner: the `raw.cities` row with `MIN(id)` for that `gc_id`. `region_name` is the trimmed text after the first comma of that row's `full_name_local`, or NULL when there is no comma (A-CITY). Coordinates come from the winning row.
-
-### 5.2 `core.dim_body_type`
-
-| | |
-| --- | --- |
-| Grain | One source body type |
-| Primary key | `body_type_id` |
-| Foreign keys | `body_group_code` → `core.dim_body_group.body_group_code` |
-| Indexes | Primary key |
-
-Columns: `body_type_id`, `name`, `id_from_1c`, `std_id`, `body_group_code`. The group is assigned by the business id list, not by trusting `std_id` alone. An id that is not in the named lists maps to `OTHER`.
-
-### 5.3 `core.dim_body_group`
+### 4.5 `audit.mart_refresh`
 
 | | |
 | --- | --- |
-| Grain | One business body group |
-| Primary key | `body_group_code` |
-| Foreign keys | None |
-| Indexes | Primary key |
+| Grain | One mart refresh attempt |
+| Primary key | `(refresh_id)` |
+| Indexes | `mart_refresh_started_idx` (mart_name, started_at) |
 
-Static rows:
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `refresh_id` | `bigint` | no |  |
+| `mart_name` | `text` | no |  |
+| `as_of_date` | `date` | no |  |
+| `status` | `text` | no |  |
+| `started_at` | `timestamp with time zone` | no |  |
+| `completed_at` | `timestamp with time zone` | yes |  |
+| `rows_deleted` | `bigint` | yes |  |
+| `rows_inserted` | `bigint` | yes |  |
+| `error_message` | `text` | yes |  |
+| `input_fingerprint` | `text` | yes | mart.market_corridor_input_fingerprint() under the refresh lock. Equal value and as_of means the rebuild can be skipped. |
 
-| `body_group_code` | `body_group_name` | `std_id` |
+Check constraints:
+
+- `mart_refresh_check`: `((((status = 'running'::text) AND (completed_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])) AND (completed_at IS NOT NULL))))`
+- `mart_refresh_rows_deleted_check`: `((rows_deleted >= 0))`
+- `mart_refresh_rows_inserted_check`: `((rows_inserted >= 0))`
+- `mart_refresh_status_check`: `((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])))`
+
+### 4.6 `audit.ml_scoring_batch`
+
+| | |
+| --- | --- |
+| Grain | One scoring batch attempt |
+| Primary key | `(scoring_batch_id)` |
+| Foreign keys | `(model_name, model_version) REFERENCES ml.ml_model_registry(model_name, model_version)` |
+| Indexes | `ml_scoring_batch_model_idx` (model_name, model_version, started_at) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `scoring_batch_id` | `bigint` | no |  |
+| `model_name` | `text` | no |  |
+| `model_version` | `text` | no |  |
+| `as_of_date` | `date` | no |  |
+| `status` | `text` | no |  |
+| `started_at` | `timestamp with time zone` | no |  |
+| `completed_at` | `timestamp with time zone` | yes |  |
+| `rows_test` | `integer` | yes |  |
+| `rows_future` | `integer` | yes |  |
+| `rows_inserted` | `integer` | yes |  |
+| `rows_updated` | `integer` | yes |  |
+| `rows_unchanged` | `integer` | yes |  |
+| `rows_deleted` | `integer` | yes |  |
+| `test_metrics` | `jsonb` | yes |  |
+| `future_summary` | `jsonb` | yes |  |
+| `error_message` | `text` | yes |  |
+| `split_roles` | `text[]` | no | Roles this batch staged and reconciled. |
+
+Check constraints:
+
+- `ml_scoring_batch_completed_check`: `(((status = 'running'::text) = (completed_at IS NULL)))`
+- `ml_scoring_batch_status_check`: `((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])))`
+
+### 4.7 `audit.pipeline_run`
+
+One row per scripts.run_pipeline execution: per-task status, counts, metrics, and logical fingerprints.
+
+| | |
+| --- | --- |
+| Grain | One pipeline runner execution |
+| Primary key | `(run_id)` |
+| Indexes | `pipeline_run_mode_started_idx` (mode, started_at) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `run_id` | `uuid` | no |  |
+| `mode` | `text` | no |  |
+| `status` | `text` | no |  |
+| `start_date` | `date` | yes |  |
+| `end_date` | `date` | yes |  |
+| `as_of_date` | `date` | no |  |
+| `started_at` | `timestamp with time zone` | no |  |
+| `completed_at` | `timestamp with time zone` | no |  |
+| `duration_s` | `numeric(12,3)` | no |  |
+| `failed_task` | `text` | yes |  |
+| `error_message` | `text` | yes |  |
+| `tasks` | `jsonb` | no |  |
+| `report` | `jsonb` | no | The execution report also written to artifacts/reports/. fingerprints compare logical results across runs. |
+
+Check constraints:
+
+- `pipeline_run_failure_check`: `(((status = 'failed'::text) = (failed_task IS NOT NULL)))`
+- `pipeline_run_mode_check`: `((mode = ANY (ARRAY['full'::text, 'etl'::text, 'mart'::text, 'train'::text, 'score'::text, 'backfill'::text])))`
+- `pipeline_run_status_check`: `((status = ANY (ARRAY['succeeded'::text, 'failed'::text])))`
+- `pipeline_run_time_check`: `(((completed_at >= started_at) AND (duration_s >= (0)::numeric)))`
+- `pipeline_run_window_check`: `((((start_date IS NULL) AND (end_date IS NULL)) OR ((start_date IS NOT NULL) AND (end_date IS NOT NULL) AND (start_date <= end_date))))`
+
+### 4.8 `audit.quarantine_price`
+
+Current rejected source deals, one row per price_id and reason. Not a core fact.
+
+| | |
+| --- | --- |
+| Grain | One rejected deal and failed rule |
+| Primary key | `(price_id, reason_code)` |
+| Foreign keys | `(batch_id) REFERENCES audit.etl_batch(batch_id)` |
+| Indexes | `quarantine_price_batch_idx` (batch_id)<br>`quarantine_price_loading_date_idx` (loading_date)<br>`quarantine_price_reason_idx` (reason_code) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `price_id` | `bigint` | no | Source prices.id. There is no foreign key to core.fact_deal. |
+| `reason_code` | `text` | no |  |
+| `batch_id` | `bigint` | no |  |
+| `rejected_at` | `timestamp with time zone` | no | When this reason was first recorded for the current source version. |
+| `source_system` | `text` | no |  |
+| `created_at` | `timestamp(0) without time zone` | yes |  |
+| `loading_date` | `date` | yes |  |
+| `loading_city_gcid` | `integer` | yes |  |
+| `unloading_city_gcid` | `integer` | yes |  |
+| `distance` | `double precision` | yes |  |
+| `total_weight` | `double precision` | yes |  |
+| `total_volume` | `double precision` | yes |  |
+| `price` | `double precision` | yes |  |
+| `currency_code` | `character varying(3)` | yes |  |
+| `nearest_rate_date` | `date` | yes |  |
+| `price_type` | `smallint` | yes |  |
+| `is_fact` | `boolean` | yes |  |
+| `reason_detail` | `text` | no | Human-readable value that failed the rule. |
+| `source_record` | `jsonb` | no | Complete source prices row. raw.prices.id is the same price_id. |
+
+Check constraints:
+
+- `quarantine_price_reason_check`: `((reason_code = ANY (ARRAY['PRICE_NON_POSITIVE'::text, 'RUB_PRICE_LE_1000'::text, 'DISTANCE_NON_POSITIVE'::text, 'WEIGHT_NEGATIVE'::text, 'VOLUME_NEGATIVE'::text, 'ORIGIN_CITY_NOT_FOUND'::text, 'DESTINATION_CITY_NOT_FOUND'::text, 'CURRENCY_UNSUPPORTED'::text, 'FX_RATE_MISSING'::text])))`
+
+## 5. Mart (`mart`)
+
+### 5.1 `mart.ml_price_predictions` (view)
+
+Fact vs forecast per deal and model version. Future rows (split_role = future) have NULL actual and error.
+
+| | |
+| --- | --- |
+| Grain | One deal and model version (brief name for the prediction mart) |
+
+| Column | Type | Notes |
 | --- | --- | --- |
-| `TENT` | Тент | 56 |
-| `REF` | Рефрижератор | 4 |
-| `ISO` | Изотерм | 2 |
-| `BORT` | Борт | 15 |
-| `OTHER` | Прочие | NULL |
-| `UNSPECIFIED` | Не указан | NULL |
+| `price_id` | `bigint` |  |
+| `loading_date` | `date` |  |
+| `loading_city_gcid` | `integer` |  |
+| `unloading_city_gcid` | `integer` |  |
+| `body_group` | `text` |  |
+| `actual_price_rub` | `numeric(18,2)` |  |
+| `predicted_price_rub` | `numeric(18,2)` |  |
+| `abs_error_rub` | `numeric(18,2)` |  |
+| `ape_pct` | `numeric(12,4)` |  |
+| `model_name` | `text` |  |
+| `scored_at` | `timestamp with time zone` |  |
+| `model_version` | `text` |  |
+| `split_role` | `text` |  |
 
-### 5.4 `core.fact_deal`
+### 5.2 `mart.mart_market_corridor`
 
-| | |
-| --- | --- |
-| Grain | One deal that passed quality checks |
-| Primary key | `price_id` (source `prices.id`) |
-| Foreign keys | `loading_city_gcid` → `core.dim_city.gc_id`; `unloading_city_gcid` → `core.dim_city.gc_id`; `ml_body_group_code` → `core.dim_body_group.body_group_code`; `body_type_id` → `core.dim_body_type.body_type_id` (nullable, `ON DELETE` not used — dimensions are upserted); `batch_id` → `raw.load_batch.batch_id` |
-| Indexes | Primary key; `(loading_date)`; `(loading_city_gcid, unloading_city_gcid)`; `(is_fact, complex, outlier_mark, loading_date)` |
-
-The table has no `price_group_id` column.
-
-| Column | Notes |
-| --- | --- |
-| `created_at`, `updated_at` | Source timestamps |
-| `subscriber_id`, `organization_id` | Pass-through. `organization_id` feeds `carriers_count` only |
-| `loading_date`, `end_loading_date` | Source dates |
-| `loading_city_gcid`, `unloading_city_gcid` | Deduped by existence in `dim_city`, not by renaming the code |
-| `distance_km numeric(12, 3)` | Source distance |
-| `total_weight_t numeric(12, 3)`, `total_volume_m3 numeric(12, 3)` | Source measures |
-| `body_type_id` | Source `prices.body_type`, nullable |
-| `ml_body_group_code` | Map of `body_type_id`, else `UNSPECIFIED` |
-| `price_src numeric(18, 2)` | Source price in `currency_code` |
-| `currency_code char(3)` | |
-| `fx_rate numeric(18, 6)` | 1 for RUB |
-| `fx_rate_date date` | NULL for RUB; otherwise the matched `nearest_rate_date` |
-| `price_rub numeric(18, 2)` | Rounded product |
-| `complex`, `price_type`, `is_fact`, `outlier_mark` | Source values |
-| `weight_category varchar(4)`, `volume_category varchar(4)` | Source value, or the imputed value |
-| `weight_category_imputed`, `volume_category_imputed` | True when the source value was NULL |
-| `source`, `item_id`, `meta_item_id`, `external_item_uuid` | Lineage. Not features |
-| `batch_id` | Last publish |
-
-Population of this table includes auctions, composite routes, outliers, and future loading dates. Filters belong to the mart and the model.
-
-### 5.5 `core.fact_deal_date`
+Market price corridor per month (from price_dates), city pair, body group, and weight category. Completed direct non-outlier deals with price_date <= as_of. LOW_DATA rows are kept, not dropped.
 
 | | |
 | --- | --- |
-| Grain | One source `price_date` of a conformed deal |
-| Primary key | `(price_id, price_date)` |
-| Foreign keys | `price_id` → `core.fact_deal.price_id` |
-| Indexes | Primary key; `(price_month)`; `(price_month, price_id)` |
-
-Columns: `price_date`, `price_month date` stored as the first day of the month. Rows with `price_date > as_of` are stored.
-
-### 5.6 `core.bridge_deal_body_group`
-
-| | |
-| --- | --- |
-| Grain | One business body group on one conformed deal |
-| Primary key | `(price_id, body_group_code)` |
-| Foreign keys | `price_id` → `core.fact_deal.price_id`; `body_group_code` → `core.dim_body_group.body_group_code` |
-| Indexes | Primary key; `(body_group_code, price_id)` |
-
-Columns: `resolution`. A deal with tent and board has two rows. A deal whose links are `56` and `61` has one row, `TENT`.
-
-## 6. Mart
-
-### 6.1 `mart.route_card`
-
-| | |
-| --- | --- |
-| Grain | One calendar month × origin `gc_id` × destination `gc_id` × body group × weight category, for eligible historical observations |
+| Grain | Month × origin `gc_id` × destination `gc_id` × body group × weight category |
+| Rows after the full load and pipeline run | 203,644 |
 | Primary key | `(price_month, loading_city_gcid, unloading_city_gcid, body_group_code, weight_category)` |
-| Foreign keys | Both city codes → `core.dim_city.gc_id`; `body_group_code` → `core.dim_body_group.body_group_code` |
-| Indexes | Primary key; `(loading_city_gcid, unloading_city_gcid, body_group_code, weight_category, price_month)`; `(price_month)`; `(reliability_level)` |
+| Foreign keys | `(body_group_code) REFERENCES core.dim_body_group(body_group_code)`<br>`(loading_city_gcid) REFERENCES core.dim_city(gc_id)`<br>`(refresh_id) REFERENCES audit.mart_refresh(refresh_id)`<br>`(unloading_city_gcid) REFERENCES core.dim_city(gc_id)` |
+| Indexes | `mart_market_corridor_month_reliability_idx` (price_month, reliability_level)<br>`mart_market_corridor_route_idx` (loading_city_gcid, unloading_city_gcid, body_group_code, weight_category, price_month) |
 
-| Column | Definition |
-| --- | --- |
-| `price_month` | First day of the month of `price_date` |
-| `loading_city_gcid`, `unloading_city_gcid` | Route |
-| `loading_city_name`, `unloading_city_name` | From `dim_city`, attributes |
-| `loading_region_name`, `unloading_region_name` | From `dim_city`, attributes |
-| `body_group_code`, `body_group_name` | Business group |
-| `weight_category` | Deal category after gap fill |
-| `p25_trip`, `median_trip`, `p75_trip`, `avg_trip` | `percentile_cont` 0.25 / 0.50 / 0.75 and average of `price_rub` |
-| `p25_km`, `median_km`, `p75_km` | Same percentiles of `price_rub / distance_km`. Average per kilometre is not a required column |
-| `trips_count` | Distinct `price_id` in the cell |
-| `carriers_count` | Distinct `organization_id` where `price_type IN (3, 9)`. Zero when none |
-| `cv_rate` | `stddev_samp(price_rub) / avg(price_rub)`, NULL when `trips_count < 2` or the average is 0 |
-| `mom_pct`, `yoy_pct` | Percent change of `median_trip` versus the previous month and versus the same month last year (A-MOM). NULL when the comparison cell is absent or its median is 0 |
-| `max_price_date` | Latest `price_date` inside the cell. Supports the freshness rule |
-| `reliability_level` | `HIGH`, `MEDIUM`, or `LOW_DATA` (A-REL) |
-| `as_of_date` | `2026-10-26` |
-| `batch_id`, `built_at` | Publish lineage |
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `price_month` | `date` | no | date_trunc(month, core.fact_deal_date.price_date). |
+| `loading_city_gcid` | `integer` | no |  |
+| `unloading_city_gcid` | `integer` | no |  |
+| `body_group_code` | `text` | no |  |
+| `weight_category` | `text` | no |  |
+| `origin_city_name` | `text` | no |  |
+| `destination_city_name` | `text` | no |  |
+| `body_group_name` | `text` | no |  |
+| `p25_trip` | `numeric(18,2)` | no |  |
+| `median_trip` | `numeric(18,2)` | no |  |
+| `p75_trip` | `numeric(18,2)` | no |  |
+| `avg_trip` | `numeric(18,2)` | no |  |
+| `p25_km` | `numeric(18,4)` | no |  |
+| `median_km` | `numeric(18,4)` | no |  |
+| `p75_km` | `numeric(18,4)` | no |  |
+| `trips_count` | `integer` | no | COUNT(DISTINCT price_id) in the cell. A deal spanning several months counts once in each month. |
+| `carriers_count` | `integer` | no | COUNT(DISTINCT organization_id) over price_type 3 and 9 rows of the cell. |
+| `cv_rate` | `numeric(12,6)` | yes | stddev_samp(price_rub) / avg(price_rub). NULL below two observations or with a zero mean. A ratio, not a percent. |
+| `mom_pct` | `numeric(12,4)` | yes | Percent change of median_trip against the same cell in the exact previous calendar month, else NULL. |
+| `yoy_pct` | `numeric(12,4)` | yes | Percent change of median_trip against the same cell exactly twelve months earlier, else NULL. |
+| `max_price_date` | `date` | no |  |
+| `freshness_days` | `integer` | no | as_of_date - max_price_date. |
+| `reliability_level` | `text` | no |  |
+| `as_of_date` | `date` | no |  |
+| `refresh_id` | `bigint` | no |  |
 
-Eligible observation, all of the following:
+Check constraints:
 
-- The deal is in `core.fact_deal`.
-- `is_fact` is true, `complex` is false, `outlier_mark` is false.
-- `price_rub > 0` and `distance_km > 0`.
-- `price_date <= as_of_date`.
-- The deal contributes one row per body group on its bridge.
-- If several `price_date` values of that deal fall in the same `price_month` and the same body group, one observation is kept: the minimum `price_date` (A-MONTH).
+- `mart_market_corridor_band_check`: `(((p25_trip <= median_trip) AND (median_trip <= p75_trip) AND (p25_km <= median_km) AND (median_km <= p75_km)))`
+- `mart_market_corridor_counts_check`: `(((trips_count > 0) AND (carriers_count >= 0) AND (carriers_count <= trips_count)))`
+- `mart_market_corridor_dates_check`: `(((max_price_date <= as_of_date) AND (max_price_date >= price_month) AND (freshness_days = (as_of_date - max_price_date))))`
+- `mart_market_corridor_month_check`: `((price_month = (date_trunc('month'::text, (price_month)::timestamp with time zone))::date))`
+- `mart_market_corridor_reliability_check`: `((reliability_level = ANY (ARRAY['HIGH'::text, 'MEDIUM'::text, 'LOW_DATA'::text])))`
+- `mart_market_corridor_weight_check`: `((weight_category = ANY (ARRAY['G20T'::text, 'FTL'::text, '10T'::text, '5T'::text, 'L5T'::text, 'OTH'::text])))`
 
-`volume_category` is not a column of this table.
+## 6. Machine learning (`ml`)
 
-### 6.2 `mart.market_corridor`
+### 6.1 `ml.v_fact_vs_forecast` (view)
 
-| | |
-| --- | --- |
-| Grain | Same row as `mart.route_card` |
-| Primary key | Same key, via the view |
-| Foreign keys | Inherited from the table |
-| Indexes | Uses the table indexes |
-
-View columns: the grain, city names, `p25_trip`, `median_trip`, `p75_trip`, `avg_trip`, `p25_km`, `median_km`, `p75_km`, `trips_count`, `as_of_date`. Evidence and dynamics remain on `route_card` so the corridor view stays the pricing band.
-
-## 7. Machine learning
-
-### 7.1 `ml.deal_features`
+Actual vs predicted per deal. pct_error is signed (positive = over-prediction). Future rows have no error.
 
 | | |
 | --- | --- |
-| Grain | One deal in the model population: train, test, or future score |
-| Primary key | `price_id` |
-| Foreign keys | `price_id` → `core.fact_deal.price_id`; `batch_id` → `raw.load_batch.batch_id` |
-| Indexes | Primary key; `(split_role, loading_date)` |
+| Grain | One prediction, with names, distance, and errors |
 
-`split_role` is `train`, `test`, or `score_future`.
-
-Feature columns (the model matrix):
-
-| Column | Kind |
-| --- | --- |
-| `distance_km` | numeric |
-| `total_weight_t`, `total_volume_m3` | numeric |
-| `origin_city_name`, `destination_city_name` | categorical, from `dim_city.name` |
-| `origin_region_name`, `destination_region_name` | categorical, NULL allowed |
-| `origin_latitude`, `origin_longitude`, `destination_latitude`, `destination_longitude` | numeric |
-| `body_group_code` | categorical, the singular ML group |
-| `weight_category`, `volume_category` | categorical |
-| `loading_year`, `loading_month`, `loading_isodow`, `loading_doy` | numeric parts of `loading_date` |
-| `month_sin`, `month_cos` | `T = 12` |
-| `dow_sin`, `dow_cos` | `T = 7`, input is ISO day of week 1–7 |
-| `doy_sin`, `doy_cos` | `T = 365.25` |
-
-Audit columns that are not features: `split_role`, `loading_date`, `price_rub`, `as_of_date`, `batch_id`. `price_rub` is stored beside the matrix so training does not join back to a table that also holds forbidden columns. The training code reads it as `y` and the feature list is an explicit allow-list.
-
-No column for `outlier_mark`, `price_group_id`, any `price_group_stats` measure, `price_src`, `fx_rate`, `price_rub / distance`, `price_rub / weight`, VAT, margin, `organization_id`, or `subscriber_id`.
-
-### 7.2 `ml.price_predictions`
-
-| | |
-| --- | --- |
-| Grain | One current prediction for one deal and one model |
-| Primary key | `(price_id, model_name)` |
-| Foreign keys | `price_id` → `core.fact_deal.price_id`; `batch_id` → `raw.load_batch.batch_id` |
-| Indexes | Primary key; `(loading_date)`; `(model_name, loading_date)` |
-
-| Column | Test row | Future row |
+| Column | Type | Notes |
 | --- | --- | --- |
-| `price_id` | source id | source id |
-| `loading_date` | inside the test window | after `2026-10-26` |
-| `loading_city_gcid`, `unloading_city_gcid` | route | route |
-| `body_group_code` | singular ML group | singular ML group |
-| `actual_price_rub` | `price_rub` | NULL |
-| `predicted_price_rub` | model output | model output |
-| `abs_error_rub` | absolute error | NULL |
-| `ape_pct` | absolute percentage error | NULL |
-| `model_name` | `catboost_regressor` for the mandatory model | same |
-| `scored_at` | run timestamp | run timestamp |
-| `batch_id` | lineage | lineage |
+| `model_name` | `text` |  |
+| `model_version` | `text` |  |
+| `split_role` | `text` |  |
+| `record_type` | `text` |  |
+| `price_id` | `bigint` |  |
+| `loading_date` | `date` |  |
+| `loading_city_gcid` | `integer` |  |
+| `origin_city` | `text` |  |
+| `unloading_city_gcid` | `integer` |  |
+| `destination_city` | `text` |  |
+| `body_group` | `text` |  |
+| `body_group_name` | `text` |  |
+| `distance_km` | `numeric(12,3)` |  |
+| `actual_price_rub` | `numeric(18,2)` |  |
+| `predicted_price_rub` | `numeric(18,2)` |  |
+| `error_rub` | `numeric` |  |
+| `abs_error_rub` | `numeric(18,2)` |  |
+| `pct_error` | `numeric` |  |
+| `ape_pct` | `numeric(12,4)` |  |
+| `ape_band` | `text` |  |
+| `scored_at` | `timestamp with time zone` |  |
+| `scoring_batch_id` | `bigint` |  |
 
-`abs_error_rub = ABS(actual_price_rub - predicted_price_rub)`. `ape_pct = ABS(actual_price_rub - predicted_price_rub) / actual_price_rub * 100`. Both expressions are computed only when `split_role = 'test'`.
-
-### 7.3 `ml.run_metrics`
+### 6.2 `ml.v_prediction_error_distribution` (view)
 
 | | |
 | --- | --- |
-| Grain | One trained model execution |
-| Primary key | `run_id` |
-| Foreign keys | `batch_id` → `raw.load_batch.batch_id` |
-| Indexes | Primary key; `(model_name, started_at)` |
+| Grain | One model version and APE band (historical rows) |
 
-Columns: `model_name`, `random_seed`, `as_of_date`, `train_start`, `train_end_exclusive`, `test_start`, `test_end_inclusive`, `n_train`, `n_test`, `n_future_scored`, `r2`, `mape_pct`, `rmse_rub`, `mae_rub`, `feature_columns text[]`, `started_at`, `finished_at`, `batch_id`.
+| Column | Type | Notes |
+| --- | --- | --- |
+| `model_name` | `text` |  |
+| `model_version` | `text` |  |
+| `ape_band` | `text` |  |
+| `deals` | `bigint` |  |
+| `pct_deals` | `numeric` |  |
+| `mean_signed_pct_error` | `numeric` |  |
 
-Metrics are computed on the test role only. Append-only: a replay adds a run and replaces prediction rows.
+### 6.3 `ml.v_prediction_error_summary` (view)
+
+Per model version: historical rows carry R2, MAE, RMSE, MAPE; future rows carry counts and mean prediction.
+
+| | |
+| --- | --- |
+| Grain | One model version and record type |
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `model_name` | `text` |  |
+| `model_version` | `text` |  |
+| `record_type` | `text` |  |
+| `deals` | `bigint` |  |
+| `first_loading_date` | `date` |  |
+| `last_loading_date` | `date` |  |
+| `mean_actual_rub` | `numeric` |  |
+| `mean_predicted_rub` | `numeric` |  |
+| `mae_rub` | `numeric` |  |
+| `rmse_rub` | `numeric` |  |
+| `mape_pct` | `numeric` |  |
+| `r2` | `numeric` |  |
+| `bias_rub` | `numeric` |  |
+| `median_ape_pct` | `numeric` |  |
+| `p90_ape_pct` | `numeric` |  |
+| `within_10_pct` | `numeric` |  |
+| `within_20_pct` | `numeric` |  |
+
+### 6.4 `ml.ml_model_registry`
+
+One trained model version. Artifacts live in ml/artifacts/<model_version>/.
+
+| | |
+| --- | --- |
+| Grain | One trained model version |
+| Rows after the full load and pipeline run | 1 |
+| Primary key | `(model_name, model_version)` |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `model_name` | `text` | no |  |
+| `model_version` | `text` | no |  |
+| `algorithm` | `text` | no |  |
+| `as_of_date` | `date` | no |  |
+| `train_start` | `date` | no |  |
+| `train_end` | `date` | no |  |
+| `test_start` | `date` | no |  |
+| `test_end` | `date` | no |  |
+| `random_seed` | `integer` | no |  |
+| `feature_columns` | `text[]` | no |  |
+| `categorical_features` | `text[]` | no |  |
+| `training_config` | `jsonb` | no |  |
+| `metrics` | `jsonb` | no |  |
+| `baseline_metrics` | `jsonb` | no |  |
+| `model_sha256` | `text` | no |  |
+| `training_rows` | `integer` | no |  |
+| `validation_rows` | `integer` | no |  |
+| `best_iteration` | `integer` | no |  |
+| `core_batch_id` | `bigint` | yes |  |
+| `registered_at` | `timestamp with time zone` | no |  |
+
+Check constraints:
+
+- `ml_model_registry_period_check`: `(((train_start <= train_end) AND (train_end < test_start) AND (test_start <= test_end) AND (test_end <= as_of_date)))`
+
+### 6.5 `ml.ml_price_predictions`
+
+One prediction per deal and model version: held-out test deals with actuals, future deals without.
+
+| | |
+| --- | --- |
+| Grain | One scored deal and model version (test or future) |
+| Rows after the full load and pipeline run | 17,699 |
+| Primary key | `(price_id, model_name, model_version)` |
+| Foreign keys | `(body_group) REFERENCES core.dim_body_group(body_group_code)`<br>`(loading_city_gcid) REFERENCES core.dim_city(gc_id)`<br>`(model_name, model_version) REFERENCES ml.ml_model_registry(model_name, model_version)`<br>`(price_id) REFERENCES core.fact_deal(price_id) ON DELETE CASCADE`<br>`(scoring_batch_id) REFERENCES audit.ml_scoring_batch(scoring_batch_id)`<br>`(unloading_city_gcid) REFERENCES core.dim_city(gc_id)` |
+| Indexes | `ml_price_predictions_route_idx` (loading_city_gcid, unloading_city_gcid, body_group)<br>`ml_price_predictions_version_role_idx` (model_name, model_version, split_role, loading_date) |
+
+| Column | Type | Null | Notes |
+| --- | --- | --- | --- |
+| `price_id` | `bigint` | no |  |
+| `model_name` | `text` | no |  |
+| `model_version` | `text` | no |  |
+| `split_role` | `text` | no |  |
+| `as_of_date` | `date` | no |  |
+| `loading_date` | `date` | no |  |
+| `loading_city_gcid` | `integer` | no |  |
+| `unloading_city_gcid` | `integer` | no |  |
+| `body_group` | `text` | no |  |
+| `actual_price_rub` | `numeric(18,2)` | yes | core.fact_deal.price_rub for test rows. Always NULL for future rows, whatever the source price says. |
+| `predicted_price_rub` | `numeric(18,2)` | no |  |
+| `abs_error_rub` | `numeric(18,2)` | yes |  |
+| `ape_pct` | `numeric(12,4)` | yes | abs_error_rub / actual_price_rub * 100. |
+| `scored_at` | `timestamp with time zone` | no |  |
+| `scoring_batch_id` | `bigint` | no |  |
+
+Check constraints:
+
+- `ml_price_predictions_role_check`: `((((split_role = 'test'::text) AND (loading_date <= as_of_date) AND (actual_price_rub > (0)::numeric) AND (abs_error_rub = abs((actual_price_rub - predicted_price_rub))) AND (ape_pct IS NOT NULL)) OR ((split_role = 'future'::text) AND (loading_date > as_of_date) AND (actual_price_rub IS NULL) AND (abs_error_rub IS NULL) AND (ape_pct IS NULL))))`
+
+## 7. Functions and procedures
+
+| Routine | Kind | Notes |
+| --- | --- | --- |
+| `core.body_group_for_type(body_type_id integer)` | function | Maps a source body type id to one business group. NULL becomes Not specified. |
+| `mart.build_market_corridor(p_as_of date)` | function | Market corridor aggregate for a snapshot date. Unrounded. Used by mart.refresh_market_corridor. |
+| `mart.market_corridor_input_fingerprint()` | function | Change detector for mart.mart_market_corridor inputs. Used to skip a rebuild when nothing it reads changed. |
+| `mart.refresh_market_corridor(IN p_as_of date, IN p_refresh_id bigint, INOUT rows_deleted bigint, INOUT rows_inserted bigint)` | procedure | Replace mart.mart_market_corridor for a snapshot date inside the caller's transaction. |
+| `ml.upsert_price_predictions(p_model_name text, p_model_version text, p_as_of date, p_batch_id bigint, p_split_roles text[])` | function |  |
 
 ## 8. Relationship overview
 
 ```mermaid
 erDiagram
-  dim_city ||--o{ fact_deal : loading
-  dim_city ||--o{ fact_deal : unloading
-  dim_body_group ||--o{ fact_deal : ml_group
-  fact_deal ||--o{ fact_deal_date : months
-  fact_deal ||--o{ bridge_deal_body_group : groups
-  dim_body_group ||--o{ bridge_deal_body_group : group
-  fact_deal ||--o| deal_features : matrix
-  fact_deal ||--o{ price_predictions : scores
-
-  dim_city {
-    int gc_id PK
-    bigint source_city_id
-  }
-  fact_deal {
-    bigint price_id PK
-    date loading_date
-    numeric price_rub
-    boolean outlier_mark
-  }
-  fact_deal_date {
-    bigint price_id PK
-    date price_date PK
-    date price_month
-  }
-  bridge_deal_body_group {
-    bigint price_id PK
-    text body_group_code PK
-  }
-  route_card {
-    date price_month PK
-    int loading_city_gcid PK
-    int unloading_city_gcid PK
-    text body_group_code PK
-    text weight_category PK
-  }
+  dim_city ||--o{ fact_deal : "loading / unloading gc_id"
+  dim_body_type |o--o{ fact_deal : body_type_id
+  dim_body_group ||--o{ fact_deal : body_group_code
+  dim_body_group ||--o{ dim_body_type : body_group_code
+  dim_exchange_rate |o--o{ fact_deal : "currency_code, fx_rate_date"
+  fact_deal ||--o{ fact_deal_date : price_id
+  fact_deal ||--|{ bridge_deal_body_group : price_id
+  dim_body_group ||--o{ bridge_deal_body_group : body_group_code
+  etl_batch ||--o{ fact_deal : batch_id
+  etl_batch ||--o{ quarantine_price : batch_id
+  etl_batch ||--o{ dq_statistic : batch_id
+  dim_city ||--o{ mart_market_corridor : "loading / unloading gc_id"
+  dim_body_group ||--o{ mart_market_corridor : body_group_code
+  mart_refresh ||--o{ mart_market_corridor : refresh_id
+  ml_model_registry ||--o{ ml_price_predictions : "model_name, model_version"
+  ml_scoring_batch ||--o{ ml_price_predictions : scoring_batch_id
+  fact_deal ||--o{ ml_price_predictions : price_id
 ```
 
-`mart.route_card` is an aggregate and has no foreign key to `fact_deal`. That is intentional: the card's grain is the cell, not the deal.
+A deal is in exactly one of `core.fact_deal` and `audit.quarantine_price`. The mart is derived from `fact_deal`, `fact_deal_date`, the bridge, and the dimensions; it has no foreign key to individual deals. Predictions cascade when their deal is deleted from core.
