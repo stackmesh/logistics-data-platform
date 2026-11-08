@@ -18,6 +18,7 @@ One physical table serves both BI modes: a network view of one month, and one ro
 | Object | File | Purpose |
 |---|---|---|
 | `mart.mart_market_corridor` | `sql/mart/001_market_corridor.sql` | The published table |
+| `mart.market_corridor_observations(p_as_of date)` | same | The eligible observations (deal × price month × body group); the first step of the build, also read by the Superset view `mart.v_market_observation` |
 | `mart.build_market_corridor(p_as_of date)` | same | The transformation as a `STABLE` SQL function. Returns unrounded rows and writes nothing |
 | `mart.refresh_market_corridor(p_as_of, p_refresh_id, ...)` | same | Replaces the table contents with `build_market_corridor(p_as_of)`, rounded on insert |
 | `mart.market_corridor_input_fingerprint()` | same | MD5 of every core value the build reads, plus both definitions. Used to skip a refresh that would change nothing |

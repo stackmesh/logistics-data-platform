@@ -91,6 +91,60 @@ COMMENT ON COLUMN mart.mart_market_corridor.yoy_pct IS
     'Percent change of median_trip against the same cell exactly twelve months earlier, else NULL.';
 COMMENT ON COLUMN mart.mart_market_corridor.freshness_days IS 'as_of_date - max_price_date.';
 
+-- The mart's population: one eligible observation per deal, month, and body group. Shared by the
+-- build below and by the BI views, so dashboards aggregate exactly the rows the mart aggregates.
+CREATE OR REPLACE FUNCTION mart.market_corridor_observations(p_as_of date)
+RETURNS TABLE (
+    price_month date,
+    price_date date,
+    body_group_code text,
+    price_id bigint,
+    loading_city_gcid integer,
+    unloading_city_gcid integer,
+    weight_category text,
+    price_rub numeric,
+    price_km numeric,
+    organization_id integer,
+    price_type smallint
+)
+LANGUAGE sql
+STABLE
+AS $$
+WITH observation AS (
+    -- One row per deal, month, and body group. The bridge already holds one row per
+    -- (price_id, body_group_code); two dates of one deal in a month collapse to the latest.
+    SELECT d.price_id, d.price_month, max(d.price_date) AS price_date, b.body_group_code
+    FROM core.fact_deal_date AS d
+    JOIN core.bridge_deal_body_group AS b ON b.price_id = d.price_id
+    WHERE d.price_date <= p_as_of
+    GROUP BY d.price_id, d.price_month, b.body_group_code
+)
+SELECT o.price_month,
+       o.price_date,
+       o.body_group_code,
+       f.price_id,
+       f.loading_city_gcid,
+       f.unloading_city_gcid,
+       f.weight_category,
+       f.price_rub,
+       f.price_rub / f.distance_km AS price_km,
+       f.organization_id,
+       f.price_type
+FROM observation AS o
+JOIN core.fact_deal AS f ON f.price_id = o.price_id
+WHERE f.is_fact
+  AND f.price_type IN (1, 2, 3, 4, 5, 9)
+  AND NOT f.complex
+  AND NOT f.outlier_mark
+  AND f.price_rub > 0
+  AND f.distance_km > 0
+  AND f.currency_code IN ('643', '840', '978')
+  AND f.fx_rate > 0
+$$;
+
+COMMENT ON FUNCTION mart.market_corridor_observations(date) IS
+    'Eligible observations (deal x price month x body group) for a snapshot date: the input of the market corridor.';
+
 -- The transformation. Values are unrounded; the refresh rounds on insert.
 CREATE OR REPLACE FUNCTION mart.build_market_corridor(p_as_of date)
 RETURNS TABLE (
@@ -121,37 +175,8 @@ RETURNS TABLE (
 LANGUAGE sql
 STABLE
 AS $$
-WITH observation AS (
-    -- One row per deal, month, and body group. The bridge already holds one row per
-    -- (price_id, body_group_code); two dates of one deal in a month collapse to the latest.
-    SELECT d.price_id, d.price_month, max(d.price_date) AS price_date, b.body_group_code
-    FROM core.fact_deal_date AS d
-    JOIN core.bridge_deal_body_group AS b ON b.price_id = d.price_id
-    WHERE d.price_date <= p_as_of
-    GROUP BY d.price_id, d.price_month, b.body_group_code
-),
-eligible AS (
-    SELECT o.price_month,
-           o.price_date,
-           o.body_group_code,
-           f.price_id,
-           f.loading_city_gcid,
-           f.unloading_city_gcid,
-           f.weight_category,
-           f.price_rub,
-           f.price_rub / f.distance_km AS price_km,
-           f.organization_id,
-           f.price_type
-    FROM observation AS o
-    JOIN core.fact_deal AS f ON f.price_id = o.price_id
-    WHERE f.is_fact
-      AND f.price_type IN (1, 2, 3, 4, 5, 9)
-      AND NOT f.complex
-      AND NOT f.outlier_mark
-      AND f.price_rub > 0
-      AND f.distance_km > 0
-      AND f.currency_code IN ('643', '840', '978')
-      AND f.fx_rate > 0
+WITH eligible AS (
+    SELECT * FROM mart.market_corridor_observations(p_as_of)
 ),
 cell AS (
     SELECT e.price_month,
