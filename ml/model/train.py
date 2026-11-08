@@ -27,7 +27,7 @@ from etl.log import configure_logging, log_event
 from ml.features.dataset import FeatureDataset, assert_no_leakage, build_dataset, metadata, seed_everything
 from ml.features.spec import CATEGORICAL_FEATURES, FEATURE_COLUMNS, NUMERIC_FEATURES, SPEC_VERSION
 from ml.model import baselines
-from ml.model.artifacts import save_artifacts
+from ml.model.artifacts import publish_latest, save_artifacts
 from ml.model.config import TrainingConfig, artifact_root
 from ml.model.metrics import regression_metrics
 
@@ -189,7 +189,7 @@ def model_card(result: TrainingResult, model_sha256: str) -> dict:
         "metrics": result.metrics,
         "baseline_metrics": {name: entry["test"] for name, entry in result.baselines.items()},
         "feature_importance": dict(sorted(
-            ((name, round(float(value), 4)) for name, value in zip(FEATURE_COLUMNS, importances)),
+            ((name, round(float(value), 4)) for name, value in zip(FEATURE_COLUMNS, importances, strict=True)),
             key=lambda item: -item[1])),
         "model_file": "model.cbm",
         "model_sha256": model_sha256,
@@ -246,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         card = save_artifacts(result, artifact_root())
         with engine.begin() as conn:
             register_model(conn, card)
+        publish_latest(artifact_root(), card)
     finally:
         engine.dispose()
     log_event(logger, "model_trained", model_name=card["model_name"], model_version=card["model_version"],

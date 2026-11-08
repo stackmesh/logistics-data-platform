@@ -238,7 +238,7 @@ def features(ctx: RunContext) -> dict:
 
 def train(ctx: RunContext) -> dict:
     from ml.features.dataset import build_dataset
-    from ml.model.artifacts import save_artifacts
+    from ml.model.artifacts import publish_latest, save_artifacts
     from ml.model.train import register_model, train_model
 
     dataset = ctx.state.get("dataset")
@@ -250,6 +250,7 @@ def train(ctx: RunContext) -> dict:
     card = save_artifacts(result, ctx.artifact_root)
     with ctx.warehouse().begin() as conn:
         register_model(conn, card)
+    publish_latest(ctx.artifact_root, card)
     ctx.state["model_version"] = card["model_version"]
     return {"model_name": card["model_name"], "model_version": card["model_version"],
             "model_sha256": card["model_sha256"], "best_iteration": card["best_iteration"],

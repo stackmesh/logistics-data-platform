@@ -39,9 +39,13 @@ def save_artifacts(result, root: Path) -> dict:
     (directory / "model_card.json").write_text(json.dumps(card, ensure_ascii=False, indent=2, default=str) + "\n")
     with (directory / "baselines.pkl").open("wb") as handle:
         pickle.dump({name: entry["model"] for name, entry in result.baselines.items()}, handle)
+    return card
+
+
+def publish_latest(root: Path, card: dict) -> None:
+    """Point the scorer at this version. Call only after the registry row is committed."""
     (root / LATEST).write_text(json.dumps(
         {"model_name": card["model_name"], "model_version": card["model_version"]}, indent=2) + "\n")
-    return card
 
 
 def load_model(root: Path, model_version: str | None = None) -> tuple[CatBoostRegressor, dict, FeaturePipeline]:

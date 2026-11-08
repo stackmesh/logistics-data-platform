@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from ml.features.dataset import build_dataset
 from ml.features.extract import FUTURE_PREDICATE
 from ml.features.spec import FEATURE_COLUMNS
-from ml.model.artifacts import load_model, save_artifacts
+from ml.model.artifacts import load_model, publish_latest, save_artifacts
 from ml.model.train import register_model, train_model
 from ml.scoring import score as scoring
 
@@ -36,6 +36,7 @@ def trained(loaded_warehouse, dwh_engine, tmp_path_factory):
     card = save_artifacts(result, root)
     with dwh_engine.begin() as conn:
         register_model(conn, card)
+    publish_latest(root, card)
     return dataset, result, card, root
 
 

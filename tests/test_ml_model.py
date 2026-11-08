@@ -17,7 +17,7 @@ from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error,
 from ml.features import extract
 from ml.features.dataset import FeatureDataset, assemble
 from ml.features.spec import CATEGORICAL_FEATURES, DEFAULT_SPLIT, FEATURE_COLUMNS, FORBIDDEN_COLUMNS, TARGET
-from ml.model.artifacts import load_model, save_artifacts, sha256_file
+from ml.model.artifacts import load_model, publish_latest, save_artifacts, sha256_file
 from ml.model.config import TrainingConfig
 from ml.model.metrics import regression_metrics
 from ml.model.train import chronological_validation_mask, make_pool, model_version, train_model
@@ -131,6 +131,7 @@ def trained(tmp_path_factory):
     root = tmp_path_factory.mktemp("artifacts")
     result = train_model(dataset, FAST)
     card = save_artifacts(result, root)
+    publish_latest(root, card)
     return dataset, result, card, root
 
 
@@ -143,6 +144,7 @@ def test_training_is_reproducible(trained, tmp_path):
     second = save_artifacts(again, tmp_path)
     assert second["model_sha256"] == card["model_sha256"]
     assert {k: v for k, v in second.items()} == card
+    assert not (tmp_path / "latest.json").exists()
 
 
 def test_model_version_changes_with_data_or_config(trained):
@@ -193,6 +195,7 @@ def test_saved_model_round_trips(trained):
 def test_tampered_model_file_is_rejected(trained, tmp_path):
     _, result, _, _ = trained
     card = save_artifacts(result, tmp_path)
+    publish_latest(tmp_path, card)
     path = tmp_path / card["model_version"] / "model.cbm"
     path.write_bytes(path.read_bytes() + b"x")
     with pytest.raises(ValueError, match="sha256"):
@@ -216,7 +219,7 @@ def test_feature_order_is_enforced(trained):
 
 def test_model_is_not_given_the_target(trained):
     dataset, result, _, _ = trained
-    importances = dict(zip(result.model.feature_names_, result.model.get_feature_importance()))
+    importances = dict(zip(result.model.feature_names_, result.model.get_feature_importance(), strict=True))
     assert set(importances) == set(FEATURE_COLUMNS)
     assert not set(importances) & FORBIDDEN_COLUMNS
     assert importances["distance"] == max(importances.values())
