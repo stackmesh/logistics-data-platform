@@ -2,7 +2,7 @@
 -- Creates empty analytical schemas and one readiness row.
 -- Does not create ETL tables or ML objects.
 
-GRANT CONNECT, CREATE ON DATABASE :"dwh_db" TO :"dwh_user";
+GRANT CONNECT, CREATE, TEMPORARY ON DATABASE :"dwh_db" TO :"dwh_user";
 REVOKE ALL ON DATABASE :"dwh_db" FROM PUBLIC;
 
 CREATE SCHEMA IF NOT EXISTS raw AUTHORIZATION :"dwh_user";

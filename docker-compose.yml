@@ -64,7 +64,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: logistics-pipeline:stage1
+    image: logistics-pipeline:stage3
     container_name: logistics-pipeline
     env_file:
       - path: .env.example
@@ -74,6 +74,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    command:
+      - bash
+      - -c
+      - python -m etl.migrate && python scripts/check_databases.py && python -m etl.main --full
     restart: "no"
     init: true
 

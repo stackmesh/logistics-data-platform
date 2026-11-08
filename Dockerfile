@@ -11,6 +11,8 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY logistics ./logistics
+COPY etl ./etl
+COPY sql ./sql
 COPY scripts ./scripts
 COPY tests ./tests
 COPY pytest.ini .

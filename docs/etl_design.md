@@ -9,7 +9,7 @@ Parameters:
 | Parameter | Default | Meaning |
 | --- | --- | --- |
 | `mode` | `full` on container start; `window` when both dates are set | Full reload, or a replay window |
-| `start_date`, `end_date` | unbounded in `full` | Inclusive filter on `GREATEST(created_at, updated_at)::date` (A-WIN) |
+| `start_date`, `end_date` | unbounded in `full` | Inclusive filter on `prices.loading_date` (A-WIN, set by the Stage 3 brief) |
 | `as_of_date` | `2026-10-26` | Mart future cutoff and ML snapshot. Not `CURRENT_DATE` |
 | `random_seed` | `20261026` | Model seed. The source seed stays inside `synthetic.sql` |
 
@@ -69,7 +69,7 @@ A deal is evaluated against every rule. One failed rule is enough to keep it out
 | 3 | `DISTANCE_NON_POSITIVE` | `distance IS NULL OR distance <= 0` |
 | 4 | `WEIGHT_NEGATIVE` | `total_weight IS NULL OR total_weight < 0` |
 | 5 | `VOLUME_NEGATIVE` | `total_volume IS NULL OR total_volume < 0` |
-| 6 | `CITY_NOT_FOUND` | loading or unloading `gc_id` not present in `raw.cities` |
+| 6 | `ORIGIN_CITY_NOT_FOUND`, `DESTINATION_CITY_NOT_FOUND` | loading or unloading `gc_id` not present in `raw.cities`, one code per side |
 | 7 | `CURRENCY_UNSUPPORTED` | `currency_code NOT IN ('643', '840', '978')` |
 | 8 | `FX_RATE_MISSING` | currency in (`840`, `978`) and the exact rate lookup in stage 4 returns no row |
 
@@ -92,7 +92,7 @@ Acceptance:
 - A fixture with USD `price = 500` and a matching rate is not quarantined by the 1000 rule.
 - A fixture with equal city codes and `distance > 0` is present in `staging.price_candidate`.
 - A fixture with equal city codes and `distance = 0` is quarantined only as `DISTANCE_NON_POSITIVE`.
-- A missing unloading city is `CITY_NOT_FOUND` even when the loading city exists.
+- A missing unloading city is `DESTINATION_CITY_NOT_FOUND` even when the loading city exists.
 - `total_weight = 0` and `total_volume = 0` pass these rules.
 - Replaying the fixture does not increase the quarantine row count.
 

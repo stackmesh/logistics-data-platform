@@ -16,7 +16,7 @@ The design documents are the contract:
 
 | ID | Decision in the design | Change if you reject it |
 | --- | --- | --- |
-| A-WIN | Extract on `GREATEST(created_at, updated_at)::date` | Name another extract column. Mart and ML dates stay as specified |
+| A-WIN | Extract on `prices.loading_date` (set by the Stage 3 brief) | Resolved |
 | A-FX-1 | Exact stored rate; RUB rate 1; round half away from zero to 2 d.p.; RUB `price <= 1000` only | |
 | A-FX-2 | Duplicate rates: greatest `id` | |
 | A-CAT | Fill NULL categories only; PostgreSQL numeric rounding | |

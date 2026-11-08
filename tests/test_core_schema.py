@@ -48,8 +48,8 @@ def _batch_id(conn) -> int:
         conn.execute(
             text(
                 """
-                INSERT INTO audit.etl_batch (source_system, mode, status)
-                VALUES ('deals_bigdata', 'full', 'succeeded')
+                INSERT INTO audit.etl_batch (source_system, mode, status, completed_at)
+                VALUES ('deals_bigdata', 'full', 'succeeded', clock_timestamp())
                 RETURNING batch_id
                 """
             )

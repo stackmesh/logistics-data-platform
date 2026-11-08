@@ -226,7 +226,8 @@ Rejected deals remain in `raw`. They do not enter `core.fact_deal`. Each failed 
 | `DISTANCE_NON_POSITIVE` | `distance` is NULL or `distance <= 0` |
 | `WEIGHT_NEGATIVE` | `total_weight` is NULL or `total_weight < 0` |
 | `VOLUME_NEGATIVE` | `total_volume` is NULL or `total_volume < 0` |
-| `CITY_NOT_FOUND` | Loading or unloading `gc_id` is absent from `cities` |
+| `ORIGIN_CITY_NOT_FOUND` | Loading `gc_id` is absent from `cities` |
+| `DESTINATION_CITY_NOT_FOUND` | Unloading `gc_id` is absent from `cities` |
 | `FX_RATE_MISSING` | Currency is `840` or `978`, and no rate exists for that `num_code` on `setting_date = nearest_rate_date` |
 | `CURRENCY_UNSUPPORTED` | Currency is outside `643`, `840`, `978` |
 
@@ -342,7 +343,7 @@ The pipeline follows the written rule where the documents disagree, and the choi
 
 | ID | Assumption | Why it is not already a requirement |
 | --- | --- | --- |
-| A-WIN | The extract window filters `GREATEST(created_at, updated_at)::date`. Mart freshness stays on `price_date`. The model stays on `loading_date` | The brief requires a date window and does not name the extract column |
+| A-WIN | Resolved by the Stage 3 brief: the extract window filters `prices.loading_date`, both bounds included. Mart freshness stays on `price_date` | The Stage 3 brief names the column |
 | A-FX-1 | `price_rub = ROUND(price::numeric * fx_rate, 2)`, half away from zero. RUB uses rate `1` and does not need a rate row. A RUB price at or below 1000 is rejected on the source price, before any conversion thought. A foreign price at or below 1000 in its own currency is kept when it is positive | Rounding and the RUB identity path are unspecified. The 1000 rule is specified only "for RUB" |
 | A-FX-2 | If several rate rows share `(num_code, setting_date)`, the row with the greatest `id` wins | The DDL has an index and no unique constraint. The generator inserts one row |
 | A-CAT | Non-null `weight_category` and `volume_category` are kept. NULL categories are filled after rounding weight to 0.1 t with half-away-from-zero rounding, matching PostgreSQL `ROUND(numeric, 1)` and the generator. Volume `FTL` is `0 < volume <= 120`; every other non-negative volume, including 0, is `OTH` | The brief says to fill gaps, and the generator already fills the columns |

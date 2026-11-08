@@ -89,7 +89,7 @@ Important columns:
 
 | Column | Meaning |
 | --- | --- |
-| `created_at`, `updated_at` | Equal in the generator. Extract window uses both (A-WIN). Capped at `2026-10-26 22:40:00` |
+| `created_at`, `updated_at` | Equal in the generator. The extract window uses `loading_date` instead (A-WIN). Capped at `2026-10-26 22:40:00` |
 | `subscriber_id` | Platform subscriber. About 15% of rows sit on seven large subscribers. Not a model feature |
 | `organization_id` | Organization on the deal. Carrier evidence only when `price_type IN (3, 9)` |
 | `loading_date` | Planned or actual loading date. Model time axis |
@@ -272,7 +272,7 @@ Landed so a lineage test can show that `core`, `mart`, and `ml` contain no view 
 
 Columns: `price_id`, `reason_code`, `batch_id`, `detected_at`, `created_at`, `loading_date`, `loading_city_gcid`, `unloading_city_gcid`, `distance`, `total_weight`, `total_volume`, `price`, `currency_code`, `nearest_rate_date`, `price_type`, `is_fact`.
 
-`reason_code` is one of `PRICE_NON_POSITIVE`, `RUB_PRICE_LE_1000`, `DISTANCE_NON_POSITIVE`, `WEIGHT_NEGATIVE`, `VOLUME_NEGATIVE`, `CITY_NOT_FOUND`, `FX_RATE_MISSING`, `CURRENCY_UNSUPPORTED`.
+`reason_code` is one of `PRICE_NON_POSITIVE`, `RUB_PRICE_LE_1000`, `DISTANCE_NON_POSITIVE`, `WEIGHT_NEGATIVE`, `VOLUME_NEGATIVE`, `ORIGIN_CITY_NOT_FOUND`, `DESTINATION_CITY_NOT_FOUND`, `FX_RATE_MISSING`, `CURRENCY_UNSUPPORTED`.
 
 A replay deletes quarantine rows for processed deal ids and inserts the current set. The table is the current reject list, not an append-only history. History of counts is `dq.batch_log`.
 
