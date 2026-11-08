@@ -1,6 +1,6 @@
 # ML design
 
-Status: design for approval. The mandatory model predicts the carrier-facing trip price in RUB without VAT, `y = price_rub`, for direct factual deals, and it scores future planned deals whose actuals must stay empty.
+Status: features implemented in `ml/features/`. See [feature_engineering_report.md](feature_engineering_report.md) for the implemented names, storage, and the differences from this design. Training and scoring are not implemented yet. The mandatory model predicts the carrier-facing trip price in RUB without VAT, `y = price_rub`, for direct factual deals, and it scores future planned deals whose actuals must stay empty.
 
 The research note's metric levels (R² near 0.93, MAPE near 13% for CatBoost) are orientation from another dataset. They are not acceptance thresholds for the synthetic snapshot. The run reports the metrics it measures.
 

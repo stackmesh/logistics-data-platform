@@ -206,7 +206,17 @@ psql -f sql/mart/examples.sql               # six example queries
 pytest tests/test_mart_market_corridor.py   # reference recomputation, edge cases, repeated refresh
 ```
 
-The compose `pipeline` service refreshes the mart after the ETL. Definitions, indexes, and the results on the real warehouse are in [docs/mart_market_corridor.md](docs/mart_market_corridor.md).
+The compose `pipeline` service refreshes the mart after the ETL, then builds the ML features. Definitions, indexes, and the results on the real warehouse are in [docs/mart_market_corridor.md](docs/mart_market_corridor.md).
+
+## ML features
+
+```bash
+python -m ml.features.dataset                 # X/y/ids Parquet + metadata.json + profile.json in artifacts/features
+pytest tests/test_ml_features.py              # rules and leakage guards, no database
+pytest tests/test_ml_feature_dataset.py       # real warehouse: counts, boundaries, reproducibility
+```
+
+`ML_FEATURE_DIR` overrides the output directory. In compose, the files land in the `ml_artifacts` volume. The split is fixed: train `[2026-07-26, 2026-10-05)`, test `[2026-10-05, 2026-10-27)` on `loading_date`. The target `price_rub` is written only to `y_*.parquet`. Definitions, filtering, distributions, and the leakage audit are in [docs/feature_engineering_report.md](docs/feature_engineering_report.md).
 
 ## Reset
 

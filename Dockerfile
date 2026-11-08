@@ -12,6 +12,7 @@ RUN pip install -r requirements.txt
 
 COPY logistics ./logistics
 COPY etl ./etl
+COPY ml ./ml
 COPY sql ./sql
 COPY scripts ./scripts
 COPY tests ./tests
@@ -19,6 +20,7 @@ COPY pytest.ini .
 COPY docker/pipeline-entrypoint.sh /app/docker/pipeline-entrypoint.sh
 
 RUN useradd --create-home --uid 1000 app \
+    && mkdir -p /app/artifacts \
     && chmod 755 /app/docker/pipeline-entrypoint.sh \
     && chown -R app:app /app
 
