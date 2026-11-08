@@ -150,6 +150,26 @@ def test_database_metrics_equal_training_metrics(trained, scored, dwh_tx):
     assert float(summary["mape_pct"]) == pytest.approx(expected["mape_pct"], abs=1e-3)
 
 
+def test_prediction_mart_has_the_brief_columns(trained, scored, dwh_tx):
+    _, _, card, _ = trained
+    columns = dwh_tx.execute(text("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'mart' AND table_name = 'ml_price_predictions' ORDER BY ordinal_position
+    """)).scalars().all()
+    assert columns[:11] == ["price_id", "loading_date", "loading_city_gcid", "unloading_city_gcid", "body_group",
+                            "actual_price_rub", "predicted_price_rub", "abs_error_rub", "ape_pct", "model_name",
+                            "scored_at"]
+    row = dwh_tx.execute(text("""
+        SELECT count(*) AS n,
+               count(*) FILTER (WHERE split_role = 'future'
+                                AND (actual_price_rub IS NOT NULL OR abs_error_rub IS NOT NULL
+                                     OR ape_pct IS NOT NULL)) AS future_with_actual
+        FROM mart.ml_price_predictions WHERE model_name = :name AND model_version = :version
+    """), _params(card)).mappings().one()
+    assert row["n"] == scored[1]["rows_test"] + scored[1]["rows_future"]
+    assert row["future_with_actual"] == 0
+
+
 def test_predictions_are_unique(trained, scored, dwh_tx):
     _, _, card, _ = trained
     duplicates = dwh_tx.execute(text("""

@@ -85,6 +85,16 @@ def test_no_duplicate_keys_anywhere(loaded_warehouse, dwh_tx):
     assert all(value == 0 for value in checks.values()), dict(checks)
 
 
+def test_brief_named_quarantine_view_matches_the_table(loaded_warehouse, dwh_tx):
+    counts = dwh_tx.execute(text("""
+        SELECT (SELECT count(*) FROM audit.dq_quarantine_prices) AS view_rows,
+               (SELECT count(*) FROM audit.quarantine_price) AS table_rows,
+               (SELECT count(*) FROM audit.dq_quarantine_prices WHERE reason_code IS NULL) AS without_reason
+    """)).mappings().one()
+    assert counts["view_rows"] == counts["table_rows"] > 0
+    assert counts["without_reason"] == 0
+
+
 def test_reconciliation_detects_tampering(loaded_warehouse, src_engine, dwh_tx):
     """Negative control: the oracle must flag a wrong amount, a lost deal, and a double outcome."""
     ids = dwh_tx.execute(text(
