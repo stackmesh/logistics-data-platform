@@ -181,11 +181,22 @@ docker compose exec postgres psql -U postgres -c 'GRANT TEMPORARY ON DATABASE lo
 ### Tests
 
 ```bash
-pytest tests/test_etl_transform.py -q   # rules only, no database
-pytest -q                                # everything, needs the databases
+pytest tests/test_etl_transform.py -q          # rules only, no database
+pytest -q                                       # everything, needs the databases
+docker compose --profile test run --rm tests    # migrations + whole suite in the container
 ```
 
-The load tests run inside a rolled-back transaction, using fixture ids and 2099 dates.
+Integration tests start with one committed full load, which is idempotent. The idempotency, backfill, and lock tests commit real batches. Every other test that writes rolls back. Run the suite against a non-production warehouse.
+
+### Quality tooling
+
+```bash
+python -m etl.quality.reconcile --full --by-month   # independent source-to-core reconciliation, exit 1 on any unexplained deal
+python scripts/benchmark_etl.py                     # cold load (rolled back) and warm rerun timings
+python scripts/dq_audit.py                          # evidence behind docs/data_quality_report.md
+```
+
+Results are in [docs/data_quality_report.md](docs/data_quality_report.md).
 
 ## Reset
 

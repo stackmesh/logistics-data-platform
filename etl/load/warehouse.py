@@ -6,6 +6,7 @@ Rows are written only when their values change, so a repeated run leaves lineage
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 
 from sqlalchemy import text
@@ -512,19 +513,27 @@ def load_snapshot(
         "extracted_at": snapshot.extracted_at,
         "source_system": source_system,
     }
+    timings: dict[str, float] = {}
+
+    def timed(name, fn, *args):
+        started = time.perf_counter()
+        value = fn(*args)
+        timings[name] = round(time.perf_counter() - started, 3)
+        return value
+
     conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": ADVISORY_LOCK_KEY})
-    for table in TARGET_TABLES:
-        conn.execute(text(f"ANALYZE {table}"))
-    _create_stages(conn)
-    staged = _stage(conn, snapshot, result)
-    raw = _load_raw(conn, params)
-    dimensions = _load_dimensions(conn, params)
-    facts = _load_facts(conn, params)
-    quarantine = _load_quarantine(conn, params)
+    timed("analyze_targets_s", lambda: [conn.execute(text(f"ANALYZE {table}")) for table in TARGET_TABLES])
+    timed("create_stages_s", _create_stages, conn)
+    staged = timed("copy_stages_s", _stage, conn, snapshot, result)
+    raw = timed("merge_raw_s", _load_raw, conn, params)
+    dimensions = timed("merge_dimensions_s", _load_dimensions, conn, params)
+    facts = timed("merge_facts_s", _load_facts, conn, params)
+    quarantine = timed("merge_quarantine_s", _load_quarantine, conn, params)
     _write_dq_statistics(conn, batch_id, result.stats["reason_counts"])
     return {
         "staged": staged,
         "raw": raw,
         "core": {**dimensions, **facts},
         "quarantine": quarantine,
+        "timings": timings,
     }

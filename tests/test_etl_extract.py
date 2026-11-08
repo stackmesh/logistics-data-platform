@@ -5,10 +5,13 @@ from __future__ import annotations
 from datetime import date
 
 import polars as pl
+import pytest
 from sqlalchemy import text
 
 from etl.config import DateWindow, load_config, source_engine
 from etl.extract.source import extract_snapshot
+
+pytestmark = pytest.mark.integration
 
 
 def test_window_is_inclusive_on_loading_date_and_children_follow_parents():

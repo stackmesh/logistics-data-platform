@@ -9,6 +9,8 @@ from sqlalchemy.pool import NullPool
 
 from logistics.settings import load_settings
 
+pytestmark = pytest.mark.integration
+
 BODY_GROUP_CASES = (
     *((code, "TENT") for code in (56, 57, 58, 59, 60, 61)),
     *((code, "REF") for code in (4, 46, 47, 48)),

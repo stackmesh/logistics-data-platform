@@ -81,5 +81,27 @@ services:
     restart: "no"
     init: true
 
+  tests:
+    image: logistics-pipeline:stage3
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: logistics-tests
+    profiles: ["test"]
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - bash
+      - -c
+      - python -m etl.migrate && python -m pytest -q -p no:cacheprovider
+    restart: "no"
+    init: true
+
 volumes:
   logistics_pgdata:

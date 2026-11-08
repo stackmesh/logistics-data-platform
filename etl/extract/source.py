@@ -110,18 +110,21 @@ class SourceSnapshot:
 def _window_predicate(window: DateWindow) -> str:
     if window.is_full:
         return "TRUE"
-    return "p.loading_date BETWEEN :start_date AND :end_date"
+    return "p.loading_date BETWEEN %(start_date)s AND %(end_date)s"
 
 
 def _read(conn: Connection, sql: str, params: dict, schema: dict, fetch_size: int) -> pl.DataFrame:
-    result = conn.execution_options(stream_results=True, yield_per=fetch_size).execute(text(sql), params)
-    frames = [
-        pl.DataFrame([tuple(row) for row in partition], schema=schema, orient="row")
-        for partition in result.partitions()
-    ]
+    """Stream through a server-side cursor so at most fetch_size rows exist as Python objects."""
+    driver = conn.connection.driver_connection
+    frames = []
+    with driver.cursor(name="etl_extract") as cursor:
+        cursor.itersize = fetch_size
+        cursor.execute(sql, params)
+        while rows := cursor.fetchmany(fetch_size):
+            frames.append(pl.DataFrame(rows, schema=schema, orient="row"))
     if not frames:
         return pl.DataFrame(schema=schema)
-    return pl.concat(frames, how="vertical")
+    return pl.concat(frames, how="vertical", rechunk=True)
 
 
 def extract_snapshot(engine: Engine, window: DateWindow, fetch_size: int) -> SourceSnapshot:

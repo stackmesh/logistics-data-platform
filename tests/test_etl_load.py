@@ -16,6 +16,8 @@ from etl.load.warehouse import load_snapshot
 from etl.transform.normalize import transform_snapshot
 from tests.etl_factories import AS_OF, default_rates, make_snapshot
 
+pytestmark = pytest.mark.integration
+
 CITIES = [
     (990001, 990001, "Тестград", "Тестград, Тестовая область"),
     (990002, 990002, "Проверск", "Проверск, Тестовая область"),
