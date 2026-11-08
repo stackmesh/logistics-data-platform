@@ -24,6 +24,22 @@ x-airflow-common: &airflow-common
     - airflow_logs:/opt/airflow/logs
   restart: unless-stopped
 
+# Superset services run with `docker compose --profile superset up -d` (docs/superset.md).
+x-superset-common: &superset-common
+  build:
+    context: .
+    dockerfile: docker/superset/Dockerfile
+  image: logistics-superset:local
+  profiles: ["superset"]
+  env_file:
+    - path: .env.example
+      required: true
+    - path: .env
+      required: false
+  environment:
+    SUPERSET_DB_HOST: superset-postgres
+    SUPERSET_DB_PORT: "5432"
+
 services:
   postgres:
     image: postgres:17
@@ -74,6 +90,7 @@ services:
       - logistics_pgdata:/var/lib/postgresql/data
       - ./requirements/reference/sql:/source-sql:ro
       - ./docker/postgres/01_init.sh:/docker-entrypoint-initdb.d/01_init.sh:ro
+      - ./docker/postgres/03_bi_reader.sh:/docker-entrypoint-initdb.d/03_bi_reader.sh:ro
       - ./docker/postgres/02_warehouse.sql:/docker/init/02_warehouse.sql:ro
       - ./docker/postgres/healthcheck.sh:/usr/local/bin/docker-healthcheck.sh:ro
     healthcheck:
@@ -221,9 +238,78 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  superset-postgres:
+    image: postgres:17
+    container_name: logistics-superset-postgres
+    profiles: ["superset"]
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    # Superset's metadata database; takes SUPERSET_DB_* instead of the warehouse's POSTGRES_*.
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        export POSTGRES_USER="$$SUPERSET_DB_USER" POSTGRES_PASSWORD="$$SUPERSET_DB_PASSWORD"
+        POSTGRES_DB="$$SUPERSET_DB_NAME" && exec docker-entrypoint.sh postgres
+    volumes:
+      - superset_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$SUPERSET_DB_USER\" -d \"$$SUPERSET_DB_NAME\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  superset-init:
+    <<: *superset-common
+    container_name: logistics-superset-init
+    command: ["/app/smart_logistics/init.sh"]
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  superset:
+    <<: *superset-common
+    container_name: logistics-superset
+    ports:
+      - "127.0.0.1:${SUPERSET_PUBLISH_PORT:-18088}:8088"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Creates or updates the warehouse connection, datasets, charts, and dashboard; safe to re-run.
+  superset-provision:
+    <<: *superset-common
+    container_name: logistics-superset-provision
+    command: ["/app/.venv/bin/python", "/app/smart_logistics/provision.py"]
+    environment:
+      SUPERSET_DB_HOST: superset-postgres
+      SUPERSET_DB_PORT: "5432"
+      SUPERSET_URL: http://superset:8088
+      BI_DB_HOST: postgres
+      BI_DB_PORT: "5432"
+    depends_on:
+      superset:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   logistics_pgdata:
   pipeline_artifacts:
   ml_models:
   airflow_pgdata:
   airflow_logs:
+  superset_pgdata:

@@ -4,6 +4,7 @@
 .local-pg/
 .venv/
 .venv-airflow/
+.venv-superset/
 venv/
 __pycache__/
 .pytest_cache/
