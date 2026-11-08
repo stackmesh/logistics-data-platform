@@ -14,7 +14,8 @@ from sqlalchemy import exc as sa_exc
 from etl.config import DateWindow
 from orchestration.dag import FAILED, NOT_RUN, SKIPPED, SUCCEEDED, PlanError, Task, execute, is_transient, plan
 from orchestration.report import build_report, compare, format_report
-from orchestration.tasks import MODES, TASKS
+from logistics.settings import SettingsError
+from orchestration.tasks import MODES, TASKS, RunContext
 from scripts import run_pipeline
 
 FULL_ORDER = ["source_ready", "warehouse_ready", "migrate", "etl", "data_quality", "mart", "features", "train",
@@ -190,6 +191,12 @@ def test_cli_windows():
     assert (window.start_date, window.end_date) == (date(2026, 9, 1), date(2026, 9, 30))
     _, window = run_pipeline.parse(["--mode", "etl"])
     assert window.is_full
+
+
+def test_as_of_date_must_match_the_ml_split():
+    config = SimpleNamespace(as_of_date=date(2026, 11, 1))
+    with pytest.raises(SettingsError, match="AS_OF_DATE 2026-11-01 differs from the ML split"):
+        RunContext.from_environment("full", DateWindow(), config)
 
 
 def test_dry_run_prints_the_plan_without_connecting(capsys, monkeypatch):

@@ -79,8 +79,14 @@ class RunContext:
 
     @classmethod
     def from_environment(cls, mode: str, window: DateWindow, config: EtlConfig, force_mart: bool = False):
+        from ml.features.spec import DEFAULT_SPLIT
         from ml.model.config import artifact_root
 
+        if config.as_of_date != DEFAULT_SPLIT.as_of:
+            raise SettingsError(
+                f"AS_OF_DATE {config.as_of_date} differs from the ML split as_of {DEFAULT_SPLIT.as_of}; "
+                "the mart and the model would describe different snapshots"
+            )
         return cls(
             mode=mode, window=window, config=config, artifact_root=artifact_root(),
             feature_dir=_env_path("ML_FEATURE_DIR", DEFAULT_FEATURE_DIR),
