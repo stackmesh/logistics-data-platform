@@ -1,0 +1,552 @@
+{
+  "generated_on": "2026-11-09",
+  "runs_per_query": 5,
+  "scales": [
+    {
+      "scale": 1,
+      "rows": 291020,
+      "datasets_identical": true,
+      "route_filter_route": [
+        1001,
+        1008
+      ],
+      "storage_bytes": {
+        "postgres_table_and_indexes": 43376640,
+        "clickhouse_compressed": 8130059
+      },
+      "queries": {
+        "route_pricing": {
+          "description": "Route pricing aggregation: trips, mean, and median price per origin-destination pair",
+          "postgres_default": {
+            "median_s": 0.3036,
+            "min_s": 0.3026,
+            "runs": [
+              0.3029,
+              0.3026,
+              0.3175,
+              0.3067,
+              0.3036
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 0.304,
+            "min_s": 0.303,
+            "runs": [
+              0.3032,
+              0.304,
+              0.3073,
+              0.3149,
+              0.303
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0156,
+            "min_s": 0.0155,
+            "runs": [
+              0.0175,
+              0.0166,
+              0.0155,
+              0.0156,
+              0.0156
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.0247,
+            "min_s": 0.0237,
+            "runs": [
+              0.0249,
+              0.0237,
+              0.0247,
+              0.0244,
+              0.0252
+            ]
+          },
+          "results_match": true,
+          "result_rows": 1560,
+          "speedup_default": 19.5
+        },
+        "monthly_corridors": {
+          "description": "Monthly market corridors at mart grain (month x route x body group x weight); summarized result",
+          "postgres_default": {
+            "median_s": 0.8769,
+            "min_s": 0.8496,
+            "runs": [
+              0.8814,
+              0.893,
+              0.8731,
+              0.8769,
+              0.8496
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 0.8595,
+            "min_s": 0.8536,
+            "runs": [
+              0.8673,
+              0.8557,
+              0.8536,
+              0.8669,
+              0.8595
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0814,
+            "min_s": 0.0782,
+            "runs": [
+              0.0782,
+              0.091,
+              0.0826,
+              0.079,
+              0.0814
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.1378,
+            "min_s": 0.1328,
+            "runs": [
+              0.1409,
+              0.1378,
+              0.1328,
+              0.1352,
+              0.1456
+            ]
+          },
+          "results_match": true,
+          "result_rows": 1,
+          "speedup_default": 10.8
+        },
+        "percentiles": {
+          "description": "P25/P50/P75 of trip and per-km price per month and body group",
+          "postgres_default": {
+            "median_s": 0.2268,
+            "min_s": 0.2263,
+            "runs": [
+              0.2292,
+              0.2263,
+              0.2265,
+              0.2296,
+              0.2268
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 0.2265,
+            "min_s": 0.2242,
+            "runs": [
+              0.2251,
+              0.227,
+              0.2265,
+              0.2242,
+              0.231
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0119,
+            "min_s": 0.0118,
+            "runs": [
+              0.0118,
+              0.0119,
+              0.0119,
+              0.0123,
+              0.012
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.0228,
+            "min_s": 0.0227,
+            "runs": [
+              0.0237,
+              0.023,
+              0.0228,
+              0.0227,
+              0.0228
+            ]
+          },
+          "results_match": true,
+          "result_rows": 222,
+          "speedup_default": 19.1
+        },
+        "large_date_range": {
+          "description": "Two years of price dates (2024-01-01..2025-12-31) by month: volume, trips, carriers, mean, median",
+          "postgres_default": {
+            "median_s": 0.1736,
+            "min_s": 0.1733,
+            "runs": [
+              0.1756,
+              0.1733,
+              0.1736,
+              0.1736,
+              0.1741
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 0.173,
+            "min_s": 0.1711,
+            "runs": [
+              0.1733,
+              0.173,
+              0.1711,
+              0.1721,
+              0.1768
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0135,
+            "min_s": 0.0127,
+            "runs": [
+              0.0127,
+              0.0138,
+              0.0137,
+              0.0135,
+              0.013
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.0197,
+            "min_s": 0.0193,
+            "runs": [
+              0.0201,
+              0.0193,
+              0.0216,
+              0.0196,
+              0.0197
+            ]
+          },
+          "results_match": true,
+          "result_rows": 24,
+          "speedup_default": 12.9
+        },
+        "route_filter": {
+          "description": "One route (busiest origin-destination pair): monthly corridor by body group and weight category",
+          "postgres_default": {
+            "median_s": 0.015,
+            "min_s": 0.0149,
+            "runs": [
+              0.0156,
+              0.0151,
+              0.015,
+              0.0149,
+              0.0149
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 0.0145,
+            "min_s": 0.0143,
+            "runs": [
+              0.0145,
+              0.0143,
+              0.0149,
+              0.0145,
+              0.0144
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0139,
+            "min_s": 0.0139,
+            "runs": [
+              0.0139,
+              0.0144,
+              0.0139,
+              0.014,
+              0.0139
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.0207,
+            "min_s": 0.0204,
+            "runs": [
+              0.0208,
+              0.0204,
+              0.0208,
+              0.0205,
+              0.0207
+            ]
+          },
+          "results_match": true,
+          "result_rows": 1064,
+          "speedup_default": 1.1
+        }
+      }
+    },
+    {
+      "scale": 10,
+      "rows": 2910200,
+      "datasets_identical": true,
+      "route_filter_route": [
+        1001,
+        1008
+      ],
+      "storage_bytes": {
+        "postgres_table_and_indexes": 367329280,
+        "clickhouse_compressed": 25148029
+      },
+      "queries": {
+        "route_pricing": {
+          "description": "Route pricing aggregation: trips, mean, and median price per origin-destination pair",
+          "postgres_default": {
+            "median_s": 3.0891,
+            "min_s": 3.0592,
+            "runs": [
+              3.0592,
+              3.1062,
+              3.0858,
+              3.1038,
+              3.0891
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 3.1109,
+            "min_s": 3.0727,
+            "runs": [
+              3.0727,
+              3.1109,
+              3.1297,
+              3.0846,
+              3.1275
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.1008,
+            "min_s": 0.0991,
+            "runs": [
+              0.1013,
+              0.1014,
+              0.0995,
+              0.1008,
+              0.0991
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.1769,
+            "min_s": 0.1749,
+            "runs": [
+              0.1794,
+              0.1795,
+              0.1749,
+              0.1769,
+              0.1758
+            ]
+          },
+          "results_match": true,
+          "result_rows": 1560,
+          "speedup_default": 30.6
+        },
+        "monthly_corridors": {
+          "description": "Monthly market corridors at mart grain (month x route x body group x weight); summarized result",
+          "postgres_default": {
+            "median_s": 4.7817,
+            "min_s": 4.7435,
+            "runs": [
+              4.7817,
+              4.7871,
+              4.7435,
+              4.8087,
+              4.7743
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 4.7915,
+            "min_s": 4.7684,
+            "runs": [
+              4.8201,
+              4.7915,
+              4.7862,
+              4.7684,
+              4.7932
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.2271,
+            "min_s": 0.2248,
+            "runs": [
+              0.2379,
+              0.2284,
+              0.2248,
+              0.2271,
+              0.226
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.5049,
+            "min_s": 0.4908,
+            "runs": [
+              0.5114,
+              0.5062,
+              0.4908,
+              0.5049,
+              0.4979
+            ]
+          },
+          "results_match": true,
+          "result_rows": 1,
+          "speedup_default": 21.1
+        },
+        "percentiles": {
+          "description": "P25/P50/P75 of trip and per-km price per month and body group",
+          "postgres_default": {
+            "median_s": 2.5264,
+            "min_s": 2.5224,
+            "runs": [
+              2.5431,
+              2.5224,
+              2.5251,
+              2.5264,
+              2.5584
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 2.5753,
+            "min_s": 2.5385,
+            "runs": [
+              2.5385,
+              2.5428,
+              2.5753,
+              2.6006,
+              2.6174
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0757,
+            "min_s": 0.0744,
+            "runs": [
+              0.0751,
+              0.0757,
+              0.0866,
+              0.0778,
+              0.0744
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.1336,
+            "min_s": 0.1325,
+            "runs": [
+              0.1345,
+              0.1334,
+              0.1336,
+              0.1325,
+              0.1346
+            ]
+          },
+          "results_match": true,
+          "result_rows": 222,
+          "speedup_default": 33.4
+        },
+        "large_date_range": {
+          "description": "Two years of price dates (2024-01-01..2025-12-31) by month: volume, trips, carriers, mean, median",
+          "postgres_default": {
+            "median_s": 2.0518,
+            "min_s": 2.0443,
+            "runs": [
+              2.0443,
+              2.0518,
+              2.0456,
+              2.0544,
+              2.0579
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 2.0472,
+            "min_s": 2.017,
+            "runs": [
+              2.0472,
+              2.1013,
+              2.0365,
+              2.048,
+              2.017
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0475,
+            "min_s": 0.0471,
+            "runs": [
+              0.0547,
+              0.0471,
+              0.0504,
+              0.0475,
+              0.0474
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.0906,
+            "min_s": 0.0882,
+            "runs": [
+              0.089,
+              0.0882,
+              0.0961,
+              0.0906,
+              0.0931
+            ]
+          },
+          "results_match": true,
+          "result_rows": 24,
+          "speedup_default": 43.2
+        },
+        "route_filter": {
+          "description": "One route (busiest origin-destination pair): monthly corridor by body group and weight category",
+          "postgres_default": {
+            "median_s": 0.152,
+            "min_s": 0.1515,
+            "runs": [
+              0.1541,
+              0.1519,
+              0.152,
+              0.1515,
+              0.1688
+            ]
+          },
+          "postgres_8_workers": {
+            "median_s": 0.1483,
+            "min_s": 0.1475,
+            "runs": [
+              0.1475,
+              0.1562,
+              0.1483,
+              0.1476,
+              0.1495
+            ]
+          },
+          "clickhouse_default": {
+            "median_s": 0.0157,
+            "min_s": 0.0154,
+            "runs": [
+              0.0154,
+              0.0157,
+              0.0156,
+              0.0158,
+              0.016
+            ]
+          },
+          "clickhouse_1_thread": {
+            "median_s": 0.0244,
+            "min_s": 0.0242,
+            "runs": [
+              0.0248,
+              0.0244,
+              0.0245,
+              0.0242,
+              0.0244
+            ]
+          },
+          "results_match": true,
+          "result_rows": 1064,
+          "speedup_default": 9.7
+        }
+      }
+    }
+  ],
+  "environment": {
+    "cpu_count": 16,
+    "cpu_model": "Intel(R) Core(TM) i7-10700K CPU @ 3.80GHz",
+    "memory_gb": 31.3,
+    "postgres": "17.11",
+    "postgres_settings": {
+      "max_parallel_workers_per_gather": "2",
+      "max_parallel_workers": "8",
+      "work_mem": "64MB",
+      "shared_buffers": "512MB",
+      "jit": "on"
+    },
+    "clickhouse": "26.8.34.13",
+    "clickhouse_max_threads": 16
+  },
+  "as_of_date": "2026-10-26"
+}
