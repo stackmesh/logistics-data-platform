@@ -87,7 +87,7 @@ def foreign_key_orphans(conn: Connection, fk: dict) -> int:
     child_cols = [_ident(column) for column in fk["columns"]]
     parent_cols = [_ident(column) for column in fk["ref_columns"]]
     not_null = " AND ".join(f"c.{column} IS NOT NULL" for column in child_cols)
-    join = " AND ".join(f"p.{parent} = c.{child}" for parent, child in zip(parent_cols, child_cols))
+    join = " AND ".join(f"p.{parent} = c.{child}" for parent, child in zip(parent_cols, child_cols, strict=True))
     sql = (f"SELECT count(*) FROM {fk['child']} AS c WHERE {not_null} "
            f"AND NOT EXISTS (SELECT 1 FROM {fk['parent']} AS p WHERE {join})")
     return int(conn.execute(text(sql)).scalar_one())

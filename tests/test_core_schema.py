@@ -146,7 +146,6 @@ def test_required_relations_and_reserved_schemas(conn):
         ("raw", "prices"),
         ("raw", "price_body_types"),
         ("raw", "price_dates"),
-        ("raw", "price_group_stats"),
         ("core", "dim_city"),
         ("core", "dim_body_group"),
         ("core", "dim_body_type"),
@@ -342,17 +341,9 @@ def test_declared_body_group_must_match_the_source_type(conn):
     assert _sqlstate(caught.value) == "23514"
 
 
-def test_price_group_stats_has_no_downstream_foreign_key(conn):
-    references = conn.execute(
-        text(
-            """
-            SELECT COUNT(*)
-            FROM pg_constraint
-            WHERE confrelid = 'raw.price_group_stats'::regclass
-            """
-        )
-    ).scalar_one()
-    assert references == 0
+def test_source_aggregate_is_not_used(conn):
+    landed = conn.execute(text("SELECT to_regclass('raw.price_group_stats')")).scalar_one()
+    assert landed is None
     core_columns = set(
         conn.execute(
             text(

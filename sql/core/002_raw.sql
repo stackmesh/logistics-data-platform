@@ -1,4 +1,4 @@
--- Source snapshots. gc_id duplicates and price_group_stats stay here.
+-- Source snapshots. gc_id duplicates stay here.
 -- Repeatable. Does not copy rows from deals_bigdata.
 
 BEGIN;
@@ -130,27 +130,7 @@ CREATE TABLE IF NOT EXISTS raw.price_dates (
 CREATE INDEX IF NOT EXISTS raw_price_dates_price_date_idx
     ON raw.price_dates (price_date);
 
-CREATE TABLE IF NOT EXISTS raw.price_group_stats (
-    id                   bigint PRIMARY KEY,
-    created_at           timestamp(0),
-    updated_at           timestamp(0),
-    loading_month        date NOT NULL,
-    loading_city_gcid    integer NOT NULL,
-    unloading_city_gcid  integer NOT NULL,
-    body_type_std_id     integer NOT NULL,
-    weight_category      varchar(4) NOT NULL,
-    volume_category      varchar(4) NOT NULL,
-    min_km_price         double precision,
-    max_km_price         double precision,
-    outliers_amount      integer,
-    clear_items_amount   integer,
-    avg_price            double precision,
-    source_system        text NOT NULL,
-    extracted_at         timestamptz NOT NULL,
-    batch_id             bigint NOT NULL REFERENCES audit.etl_batch (batch_id)
-);
-
-COMMENT ON TABLE raw.price_group_stats IS
-    'Audit landing of the source aggregate. Core, mart, and ml must not reference it.';
+-- The source aggregate price_group_stats is not extracted: the mart recomputes corridors from deals.
+DROP TABLE IF EXISTS raw.price_group_stats;
 
 COMMIT;

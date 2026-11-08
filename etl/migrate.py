@@ -1,4 +1,4 @@
-"""Apply sql/core, then sql/mart migrations, in file-name order. Each file manages its own transaction."""
+"""Apply sql/core, sql/mart, then sql/ml migrations, in file-name order. Each file manages its own transaction."""
 
 from __future__ import annotations
 
