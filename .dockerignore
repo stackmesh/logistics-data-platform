@@ -1,0 +1,17 @@
+.git
+.venv
+venv
+__pycache__
+.pytest_cache
+.mypy_cache
+*.py[cod]
+*.egg-info
+dist
+build
+.env
+docs
+requirements/reference/attachments
+**/*.html
+*.log
+.idea
+.vscode

@@ -1,0 +1,81 @@
+name: logistics-data-platform
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: logistics-postgres
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    command:
+      - postgres
+      - -c
+      - "listen_addresses=*"
+      - -c
+      - max_connections=40
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - timezone=UTC
+      - -c
+      - log_timezone=UTC
+      - -c
+      - log_destination=stderr
+      - -c
+      - logging_collector=off
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+      - -c
+      - "log_line_prefix=%m [%p] %q%u@%d "
+    shm_size: 1gb
+    ports:
+      - "${POSTGRES_PUBLISH_PORT:-5432}:5432"
+    volumes:
+      - logistics_pgdata:/var/lib/postgresql/data
+      - ./requirements/reference/sql:/source-sql:ro
+      - ./docker/postgres/01_init.sh:/docker-entrypoint-initdb.d/01_init.sh:ro
+      - ./docker/postgres/02_warehouse.sql:/docker/init/02_warehouse.sql:ro
+      - ./docker/postgres/healthcheck.sh:/usr/local/bin/docker-healthcheck.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash /usr/local/bin/docker-healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      start_period: 180s
+      retries: 80
+    restart: unless-stopped
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: logistics-pipeline:stage1
+    container_name: logistics-pipeline
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    init: true
+
+volumes:
+  logistics_pgdata:
