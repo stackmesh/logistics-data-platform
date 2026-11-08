@@ -12,6 +12,7 @@ This document describes the platform as built. Detailed contracts live in the co
 | [ml_design.md](ml_design.md) | Population, split, training, scoring, fact vs forecast |
 | [ml_evaluation_report.md](ml_evaluation_report.md) | Measured metrics, baselines, error analysis |
 | [airflow.md](airflow.md) | Airflow DAG: tasks, data intervals, backfill, retries, deployment, test results |
+| [superset.md](superset.md) | Superset dashboard: BI views and role, metric definitions, filters, deployment, validation against PostgreSQL |
 
 ## 1. Shape of the system
 
@@ -30,7 +31,7 @@ flowchart LR
   score --> pred["Prediction Mart<br/>ml.ml_price_predictions"]
 ```
 
-Two orchestrators call the same task functions in `orchestration/tasks.py`. The command-line runner (`orchestration/dag.py`, `orchestration/runner.py`) is what `docker compose up` runs. The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` (compose profile `airflow`) adds daily data intervals, backfills, per-task retries and timeouts, and run history. Each Airflow task runs one step of `orchestration/airflow_steps.py` in the platform's own virtualenv, because Airflow's dependency constraints pin other versions of Polars, pandas, and psycopg; see [airflow.md](airflow.md). Superset and ClickHouse are not used. The mart table and the prediction mart are the contracts a BI tool or a ClickHouse copy would read.
+Two orchestrators call the same task functions in `orchestration/tasks.py`. The command-line runner (`orchestration/dag.py`, `orchestration/runner.py`) is what `docker compose up` runs. The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` (compose profile `airflow`) adds daily data intervals, backfills, per-task retries and timeouts, and run history. Each Airflow task runs one step of `orchestration/airflow_steps.py` in the platform's own virtualenv, because Airflow's dependency constraints pin other versions of Polars, pandas, and psycopg; see [airflow.md](airflow.md). Apache Superset 6.1 (compose profile `superset`) serves the dashboard "Smart Logistics — Market Rate Intelligence". It reads three views in schema `mart` through the read-only login `bi_reader`, and the views add no business rules. See [superset.md](superset.md). ClickHouse is not used.
 
 ## 2. Databases, roles, and schemas
 
@@ -38,6 +39,7 @@ Two orchestrators call the same task functions in `orchestration/tasks.py`. The 
 | --- | --- | --- | --- |
 | `deals_bigdata` | `public` (reference DDL, unchanged) | `source_reader` | `CONNECT`, `SELECT` only |
 | `logistics_dwh` | `raw`, `core`, `mart`, `ml`, `audit` | `dwh_etl` | Owns the schemas; `CONNECT`, `CREATE`, `TEMPORARY` |
+| `logistics_dwh` | `mart` | `bi_reader` | `CONNECT`, `USAGE` and `SELECT` on `mart`, `EXECUTE` on `mart.bi_market_observations()`; read-only sessions |
 
 The superuser is used only by container initialization and the health check. The pipeline entrypoint unsets `POSTGRES_PASSWORD` before Python starts. One server is enough for this volume and keeps `docker compose up` to one durable service; the two databases still give hard separation, because PostgreSQL cannot join across databases.
 
@@ -48,6 +50,7 @@ The superuser is used only by container initialization and the health check. The
 | Quarantine | `audit.quarantine_price` (view `audit.dq_quarantine_prices`) | One row per rejected deal and failed rule | Current state for loaded windows |
 | Core DWH | `core.fact_deal`, `core.fact_deal_date`, `core.bridge_deal_body_group`, `core.dim_city`, `core.dim_body_type`, `core.dim_body_group`, `core.dim_exchange_rate` | One accepted deal; one deal × price date; one deal × body group | Current state |
 | Mart | `mart.mart_market_corridor` | Month × origin × destination × body group × weight category | Rebuilt as a whole |
+| BI | views `mart.v_market_observation`, `mart.v_route_pricing`, `mart.v_fact_vs_forecast` | Mart observation; mart cell; scored deal | Views |
 | ML | `ml.ml_model_registry`, `ml.ml_price_predictions`, views `ml.v_fact_vs_forecast`, `ml.v_prediction_error_summary`, `ml.v_prediction_error_distribution`, `mart.ml_price_predictions` | One model version; one deal × model version | Current state per version |
 | Audit | `audit.etl_batch`, `audit.dq_statistic`, `audit.mart_refresh`, `audit.ml_scoring_batch`, `audit.pipeline_run`, `audit.bootstrap` | One row per run of each step | Append-only |
 

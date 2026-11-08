@@ -32,7 +32,7 @@ A local, repeatable batch platform on PostgreSQL 17 and Python 3.12. It loads a 
 24. [Example SQL queries](#24-example-sql-queries)
 25. [Known limitations and future improvements](#25-known-limitations-and-future-improvements)
 
-Detailed documents: [architecture](docs/architecture.md), [data dictionary](docs/data_dictionary.md), [ETL design](docs/etl_design.md), [data quality report](docs/data_quality_report.md), [mart design](docs/mart_design.md), [feature engineering report](docs/feature_engineering_report.md), [ML design](docs/ml_design.md), [ML evaluation report](docs/ml_evaluation_report.md), [Airflow orchestration](docs/airflow.md).
+Detailed documents: [architecture](docs/architecture.md), [data dictionary](docs/data_dictionary.md), [ETL design](docs/etl_design.md), [data quality report](docs/data_quality_report.md), [mart design](docs/mart_design.md), [feature engineering report](docs/feature_engineering_report.md), [ML design](docs/ml_design.md), [ML evaluation report](docs/ml_evaluation_report.md), [Airflow orchestration](docs/airflow.md), [Superset dashboard](docs/superset.md).
 
 ## 1. Project overview
 
@@ -79,12 +79,17 @@ flowchart LR
   feat --> train["Model Training<br/>CatBoost + 3 baselines"]
   train --> score["Batch Scoring<br/>test + future"]
   score --> pred[("Prediction Mart<br/>ml.ml_price_predictions")]
+  mart --> bi["BI views mart.v_*<br/>read-only bi_reader"]
+  pred --> bi
+  bi --> superset["Apache Superset<br/>Market Rate Intelligence"]
 ```
 
 Two orchestrators run the same task functions:
 
 - The command-line runner (`python -m scripts.run_pipeline`) runs `source_ready → warehouse_ready → migrate → etl → data_quality → mart → features → train → score_test → score_future → verify → report`, with retries and a run report. It is what `docker compose up` runs.
 - The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` runs one data interval per day, plus backfills: `check_source_connectivity → validate_source_data → prepare_warehouse → run_etl → run_data_quality → (refresh_marts ‖ generate_features → train_or_load_model → run_batch_inference) → validate_prediction_records → publish_pipeline_statistics`. See [docs/airflow.md](docs/airflow.md).
+
+The Apache Superset dashboard **Smart Logistics — Market Rate Intelligence** (compose profile `superset`) reads three views in schema `mart` through the read-only login `bi_reader`. It has four tabs: Market Overview, Route Pricing, Market Dynamics, and Fact vs Forecast. See [docs/superset.md](docs/superset.md).
 
 ## 4. Technology stack
 
@@ -99,7 +104,8 @@ Two orchestrators run the same task functions:
 | Storage of features | Parquet (PyArrow) | Exact, typed, reproducible feature snapshots |
 | Deployment | Docker Compose | One command to build the snapshot, warehouse, mart, and model |
 | Scheduling | Apache Airflow 3.4 (optional compose profile) | Daily data intervals, backfills, per-task retries and timeouts, run history. Tasks run the platform in its own virtualenv, because Airflow's constraints pin other library versions |
-| Tests | pytest | 292 tests: unit and integration against the real snapshot, plus Airflow DAG tests |
+| BI | Apache Superset 6.1 (optional compose profile) | Dashboard for procurement managers, provisioned from code over the REST API, reading the warehouse with a read-only role |
+| Tests | pytest | 309 tests: unit and integration against the real snapshot, plus Airflow DAG and Superset BI tests |
 
 All 33 Python packages are pinned in `constraints.txt` (`pip install -r requirements.txt -c constraints.txt`).
 
@@ -455,6 +461,17 @@ docker compose exec airflow-scheduler airflow dags trigger smart_logistics_data_
 
 A scheduled run at D+1 00:00 UTC loads `loading_date` D. Transient database errors are retried with exponential backoff; data quality, integrity, and credential errors fail at once. Every run, failed or not, is recorded in `audit.pipeline_run` with `mode = 'airflow'`. Variables: `AIRFLOW_DB_*`, `AIRFLOW__API_AUTH__JWT_SECRET`, `AIRFLOW_PUBLISH_PORT`, `PIPELINE_AIRFLOW_RETRIES`, `PIPELINE_AIRFLOW_RETRY_DELAY_S`. Details, the test results, and running without Docker are in [docs/airflow.md](docs/airflow.md).
 
+**Superset.** The `superset` profile adds a metadata database, `superset-init`, the web server at `http://127.0.0.1:18088`, and `superset-provision`, which creates the warehouse connection, datasets, charts, filters, and the dashboard:
+
+```bash
+docker compose up --build --exit-code-from pipeline                     # first full load; creates the BI views
+docker compose --profile superset up -d --build
+docker compose --profile superset logs -f superset-provision           # ends with the dashboard URL
+# http://127.0.0.1:18088/superset/dashboard/market-rate-intelligence/  (SUPERSET_ADMIN_USERNAME / _PASSWORD)
+```
+
+On a warehouse volume created before this profile existed, create the BI role once: `docker compose exec postgres bash /docker-entrypoint-initdb.d/03_bi_reader.sh`, then `docker compose run --rm pipeline python -m etl.migrate`. Variables: `BI_DB_USER`, `BI_DB_PASSWORD`, `SUPERSET_DB_*`, `SUPERSET_SECRET_KEY`, `SUPERSET_ADMIN_*`, `SUPERSET_PUBLISH_PORT`. Metric definitions, filter scopes, the PostgreSQL validation (91 of 91 checks match), and running without Docker are in [docs/superset.md](docs/superset.md).
+
 **Running from the host** against the compose database (Python 3.11+):
 
 ```bash
@@ -483,8 +500,9 @@ pytest -q                                           # everything; needs the data
 | ML | `test_ml_features.py`, `test_ml_feature_dataset.py`, `test_ml_model.py`, `test_ml_scoring.py` |
 | Pipeline | `test_pipeline_runner.py`, `test_pipeline_integration.py` |
 | Airflow | `test_airflow_steps.py`, `test_airflow_dag.py` (DAG graph and retry tests run only where `apache-airflow` is installed: `.venv-airflow/bin/python -m pytest -o addopts="" tests/test_airflow_dag.py`) |
+| Superset BI | `test_superset_bi.py` (BI views against the mart, `bi_reader` privileges, dashboard specification); chart data against PostgreSQL: `superset/validate.py` |
 
-Latest result against a clean warehouse: **286 passed, 6 skipped in 273.12 s**. The 6 skipped tests need `apache-airflow`; in the Airflow virtualenv, `tests/test_airflow_dag.py` gives 21 passed. `-m "not integration"` alone: 180 passed, 6 skipped in 2.3 s with no database configured. Integration tests commit idempotent batches to the warehouse they target and assert the exact counts of the 300,000-deal snapshot, so run them against a disposable warehouse built from that snapshot.
+Latest result against a clean warehouse: **303 passed, 6 skipped in 413.81 s**. The 6 skipped tests need `apache-airflow`; in the Airflow virtualenv, `tests/test_airflow_dag.py` gives 21 passed. `-m "not integration"` alone: 186 passed, 6 skipped in 2.5 s with no database configured. The `bi_reader` tests need the role and `BI_DB_PASSWORD`, and skip without them. Integration tests commit idempotent batches to the warehouse they target and assert the exact counts of the 300,000-deal snapshot, so run them against a disposable warehouse built from that snapshot.
 
 Quality tools:
 
@@ -561,6 +579,7 @@ FROM audit.pipeline_run ORDER BY started_at DESC LIMIT 5;
 - `docker compose up` was never executed (no Docker on the development host). The compose file passes `docker compose config`, the image's dependencies resolve to Python 3.12 wheels, and the pipeline ran against an equivalent clean PostgreSQL 17.11 cluster. The image build and the container network are untested.
 - Training ran on Python 3.11; the image uses 3.12 with the same pinned package versions.
 - The Airflow image and compose services were never started either. The DAG ran on Airflow 3.4.0 outside Docker against the clean cluster: normal, backfill, repeated, transient-failure, and permanent-failure runs ([docs/airflow.md](docs/airflow.md), section 8).
+- The Superset image and compose services were never started. The dashboard was provisioned on Superset 6.1.0 from a virtualenv against the clean cluster, checked against PostgreSQL (91 of 91 checks), and opened in a browser ([docs/superset.md](docs/superset.md), section 5).
 
 **Data and ETL**
 

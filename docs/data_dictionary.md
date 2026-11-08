@@ -866,6 +866,18 @@ Check constraints:
 - `mart_market_corridor_reliability_check`: `((reliability_level = ANY (ARRAY['HIGH'::text, 'MEDIUM'::text, 'LOW_DATA'::text])))`
 - `mart_market_corridor_weight_check`: `((weight_category = ANY (ARRAY['G20T'::text, 'FTL'::text, '10T'::text, '5T'::text, 'L5T'::text, 'OTH'::text])))`
 
+### 5.3 BI views for Superset (`sql/ml/003_bi_views.sql`)
+
+Read-only views for the Superset dashboard; `bi_reader` can select them. They rename columns and add no business rules. All three have the filter columns `month` (`YYYY-MM`), `origin_city`, `destination_city`, `body_group` (name), and `weight_category`. See [superset.md](superset.md).
+
+| View | Grain | Source | Columns |
+| --- | --- | --- | --- |
+| `mart.v_market_observation` | Deal × price month × body group: one observation of the mart | `mart.bi_market_observations()` joined to its `mart.mart_market_corridor` cell | `price_month`, `month`, `year`, `month_of_year`, `price_date`, `price_id`, `origin_city`, `destination_city`, `body_group`, `weight_category`, `price_rub`, `price_km`, `carrier_id` (organization of price types 3 and 9, else NULL), `reliability_level` (of the cell), `as_of_date` |
+| `mart.v_route_pricing` | Mart cell | `mart.mart_market_corridor` | `price_month`, `month`, `origin_city`, `destination_city`, `body_group`, `weight_category`, `p25_trip`, `p50_trip` (= `median_trip`), `p75_trip`, `avg_trip`, `p25_km`, `p50_km` (= `median_km`), `p75_km`, `mom_pct`, `yoy_pct`, `trips_count`, `carriers_count`, `reliability_level`, `cv_rate`, `max_price_date`, `freshness_days`, `as_of_date` |
+| `mart.v_fact_vs_forecast` | Deal × model version | `ml.v_fact_vs_forecast` + `core.fact_deal.weight_category` | `record_type`, `split_role`, `model_name`, `model_version`, `price_id`, `loading_date`, `month`, `origin_city`, `destination_city`, `body_group`, `weight_category`, `distance_km`, `actual_price_rub`, `predicted_price_rub`, `error_rub`, `abs_error_rub`, `pct_error`, `ape_pct`, `ape_band`, `scored_at` |
+
+Per cell, `v_market_observation` reproduces the mart: its row count is `trips_count`, its distinct `carrier_id` count is `carriers_count`, and its percentiles are the mart's percentiles.
+
 ## 6. Machine learning (`ml`)
 
 ### 6.1 `ml.v_fact_vs_forecast` (view)
@@ -1020,7 +1032,9 @@ Check constraints:
 | Routine | Kind | Notes |
 | --- | --- | --- |
 | `core.body_group_for_type(body_type_id integer)` | function | Maps a source body type id to one business group. NULL becomes Not specified. |
+| `mart.bi_market_observations()` | function, `SECURITY DEFINER` | `mart.market_corridor_observations` at the `as_of_date` of the current mart rows, plus `as_of_date`. `EXECUTE` only for `bi_reader`. Behind `mart.v_market_observation`. |
 | `mart.build_market_corridor(p_as_of date)` | function | Market corridor aggregate for a snapshot date. Unrounded. Used by mart.refresh_market_corridor. |
+| `mart.market_corridor_observations(p_as_of date)` | function | Eligible observations (deal × price month × body group) for a snapshot date: the input of the market corridor. Used by `mart.build_market_corridor` and `mart.bi_market_observations`. |
 | `mart.market_corridor_input_fingerprint()` | function | Change detector for mart.mart_market_corridor inputs. Used to skip a rebuild when nothing it reads changed. |
 | `mart.refresh_market_corridor(IN p_as_of date, IN p_refresh_id bigint, INOUT rows_deleted bigint, INOUT rows_inserted bigint)` | procedure | Replace mart.mart_market_corridor for a snapshot date inside the caller's transaction. |
 | `ml.upsert_price_predictions(p_model_name text, p_model_version text, p_as_of date, p_batch_id bigint, p_split_roles text[])` | function |  |
