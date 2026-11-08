@@ -26,6 +26,7 @@ SOURCE_TABLES = (
 )
 
 WAREHOUSE_SCHEMAS = ("raw", "core", "mart", "ml", "audit")
+ML_TABLES = ("ml.ml_model_registry", "ml.ml_price_predictions")
 
 COUNT_TABLES = (
     "cities",
@@ -270,13 +271,13 @@ def run_checks(settings: Settings | None = None) -> Report:
                 )
             ).mappings()
             relation_list = [f"{row['schema_name']}.{row['table_name']}" for row in relations]
-            reserved = [name for name in relation_list if name.startswith("ml.")]
+            unexpected = [name for name in relation_list if name.startswith("ml.") and name not in ML_TABLES]
             report.add("audit.bootstrap" in relation_list, "audit.bootstrap exists")
             report.add(
-                not reserved,
-                "ml schema has no tables"
-                if not reserved
-                else "reserved schemas already have tables: " + ", ".join(reserved),
+                not unexpected,
+                "ml schema holds only model tables"
+                if not unexpected
+                else "unexpected ml tables: " + ", ".join(unexpected),
             )
 
         source_denied, source_denied_detail = _access_denied(

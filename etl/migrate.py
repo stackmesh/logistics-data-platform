@@ -12,7 +12,7 @@ from etl.config import load_config
 from etl.log import configure_logging, log_event
 
 SQL_DIR = Path(__file__).resolve().parents[1] / "sql"
-MIGRATION_DIRS = (SQL_DIR / "core", SQL_DIR / "mart")
+MIGRATION_DIRS = (SQL_DIR / "core", SQL_DIR / "mart", SQL_DIR / "ml")
 logger = logging.getLogger("etl.migrate")
 
 

@@ -3,3 +3,5 @@ psycopg[binary]>=3.2,<4
 polars>=1.9,<2
 numpy>=1.26,<3
 pytest>=8.3,<9
+catboost==1.2.10
+scikit-learn>=1.5,<1.8

@@ -218,6 +218,17 @@ pytest tests/test_ml_feature_dataset.py       # real warehouse: counts, boundari
 
 `ML_FEATURE_DIR` overrides the output directory. In compose, the files land in the `ml_artifacts` volume. The split is fixed: train `[2026-07-26, 2026-10-05)`, test `[2026-10-05, 2026-10-27)` on `loading_date`. The target `price_rub` is written only to `y_*.parquet`. Definitions, filtering, distributions, and the leakage audit are in [docs/feature_engineering_report.md](docs/feature_engineering_report.md).
 
+## Model training and batch scoring
+
+```bash
+python -m ml.model.train                  # CatBoost + baselines, artifacts in ml/artifacts/<version>/, row in ml.ml_model_registry
+python -m ml.scoring.score                # test + future deals -> ml.ml_price_predictions (transactional upsert)
+psql -f sql/ml/fact_vs_forecast.sql       # actual vs predicted, error distribution, future predictions
+pytest tests/test_ml_model.py tests/test_ml_scoring.py
+```
+
+`ML_ARTIFACT_DIR` overrides `ml/artifacts`. In compose that directory is the `ml_models` volume. Future deals get a prediction and NULL actuals, whatever their source price says. Measured metrics and limitations are in [docs/ml_evaluation_report.md](docs/ml_evaluation_report.md).
+
 ## Reset
 
 Initialization runs only on an empty data volume.

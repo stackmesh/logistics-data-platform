@@ -20,7 +20,7 @@ COPY pytest.ini .
 COPY docker/pipeline-entrypoint.sh /app/docker/pipeline-entrypoint.sh
 
 RUN useradd --create-home --uid 1000 app \
-    && mkdir -p /app/artifacts \
+    && mkdir -p /app/artifacts /app/ml/artifacts \
     && chmod 755 /app/docker/pipeline-entrypoint.sh \
     && chown -R app:app /app
 

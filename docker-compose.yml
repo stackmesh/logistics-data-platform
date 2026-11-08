@@ -77,9 +77,10 @@ services:
     command:
       - bash
       - -c
-      - python -m etl.migrate && python scripts/check_databases.py && python -m etl.main --full && python -m etl.mart.refresh && python -m ml.features.dataset
+      - python -m etl.migrate && python scripts/check_databases.py && python -m etl.main --full && python -m etl.mart.refresh && python -m ml.features.dataset && python -m ml.model.train && python -m ml.scoring.score
     volumes:
       - ml_artifacts:/app/artifacts
+      - ml_models:/app/ml/artifacts
     restart: "no"
     init: true
 
@@ -108,3 +109,4 @@ services:
 volumes:
   logistics_pgdata:
   ml_artifacts:
+  ml_models:

@@ -48,6 +48,24 @@ WHERE {POPULATION_PREDICATE}
 ORDER BY f.loading_date, f.price_id
 """
 
+# Planned deals after as_of: direct, non-auction. No price column and no price-derived flag
+# (is_fact, outlier_mark) decides membership; the source price of a planned deal is not an actual.
+FUTURE_PREDICATE = """
+    f.loading_date > :as_of
+    AND NOT f.complex
+    AND f.price_type <> 6
+    AND f.distance_km > 0
+"""
+
+FUTURE_SQL = f"""
+SELECT {", ".join(f"{expr} AS {name}" for name, expr in BASE_COLUMNS.items())}
+FROM core.fact_deal AS f
+JOIN core.dim_city AS o ON o.gc_id = f.loading_city_gcid
+JOIN core.dim_city AS d ON d.gc_id = f.unloading_city_gcid
+WHERE {FUTURE_PREDICATE}
+ORDER BY f.loading_date, f.price_id
+"""
+
 FUNNEL_SQL = """
 SELECT count(*) AS in_window,
        count(*) FILTER (WHERE f.is_fact) AS is_fact,
@@ -74,6 +92,13 @@ def _params(split: SplitWindows) -> dict:
 
 def read_population(conn: Connection, split: SplitWindows) -> pl.DataFrame:
     result = conn.execute(text(POPULATION_SQL), _params(split))
+    frame = pl.DataFrame([tuple(row) for row in result], schema=list(result.keys()), orient="row",
+                         infer_schema_length=None)
+    return frame.with_columns(pl.col("loading_date").cast(pl.Date))
+
+
+def read_future_population(conn: Connection, split: SplitWindows) -> pl.DataFrame:
+    result = conn.execute(text(FUTURE_SQL), {"as_of": split.as_of})
     frame = pl.DataFrame([tuple(row) for row in result], schema=list(result.keys()), orient="row",
                          infer_schema_length=None)
     return frame.with_columns(pl.col("loading_date").cast(pl.Date))

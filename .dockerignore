@@ -15,3 +15,6 @@ requirements/reference/attachments
 *.log
 .idea
 .vscode
+.local-pg
+artifacts
+ml/artifacts

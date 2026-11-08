@@ -157,7 +157,7 @@ def test_required_relations_and_reserved_schemas(conn):
     }
     missing = required - present
     assert not missing, missing
-    assert not any(schema == "ml" for schema, _ in present)
+    assert {name for schema, name in present if schema == "ml"} <= {"ml_model_registry", "ml_price_predictions"}
 
 
 def test_fact_preserves_source_deal_columns(conn):
