@@ -722,11 +722,11 @@ Check constraints:
 
 ### 4.7 `audit.pipeline_run`
 
-One row per scripts.run_pipeline execution: per-task status, counts, metrics, and logical fingerprints.
+One row per scripts.run_pipeline execution or Airflow DAG run (mode airflow, run_id derived from the Airflow run_id): per-task status, counts, metrics, and logical fingerprints.
 
 | | |
 | --- | --- |
-| Grain | One pipeline runner execution |
+| Grain | One pipeline runner execution, or one Airflow DAG run (a retried or cleared run updates its row) |
 | Primary key | `(run_id)` |
 | Indexes | `pipeline_run_mode_started_idx` (mode, started_at) |
 
@@ -749,7 +749,7 @@ One row per scripts.run_pipeline execution: per-task status, counts, metrics, an
 Check constraints:
 
 - `pipeline_run_failure_check`: `(((status = 'failed'::text) = (failed_task IS NOT NULL)))`
-- `pipeline_run_mode_check`: `((mode = ANY (ARRAY['full'::text, 'etl'::text, 'mart'::text, 'train'::text, 'score'::text, 'backfill'::text])))`
+- `pipeline_run_mode_check`: `((mode = ANY (ARRAY['full'::text, 'etl'::text, 'mart'::text, 'train'::text, 'score'::text, 'backfill'::text, 'airflow'::text])))`
 - `pipeline_run_status_check`: `((status = ANY (ARRAY['succeeded'::text, 'failed'::text])))`
 - `pipeline_run_time_check`: `(((completed_at >= started_at) AND (duration_s >= (0)::numeric)))`
 - `pipeline_run_window_check`: `((((start_date IS NULL) AND (end_date IS NULL)) OR ((start_date IS NOT NULL) AND (end_date IS NOT NULL) AND (start_date <= end_date))))`

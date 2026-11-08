@@ -11,6 +11,7 @@ This document describes the platform as built. Detailed contracts live in the co
 | [feature_engineering_report.md](feature_engineering_report.md) | ML features, distributions, leakage audit |
 | [ml_design.md](ml_design.md) | Population, split, training, scoring, fact vs forecast |
 | [ml_evaluation_report.md](ml_evaluation_report.md) | Measured metrics, baselines, error analysis |
+| [airflow.md](airflow.md) | Airflow DAG: tasks, data intervals, backfill, retries, deployment, test results |
 
 ## 1. Shape of the system
 
@@ -29,7 +30,7 @@ flowchart LR
   score --> pred["Prediction Mart<br/>ml.ml_price_predictions"]
 ```
 
-Airflow, Superset, and ClickHouse are not used. The workload is one daily batch over 300,000 deals, and a runner of about 220 lines (`orchestration/dag.py` and `orchestration/runner.py`) covers ordering, retries, and failure propagation without another service to operate. The mart table and the prediction mart are the contracts a BI tool or a ClickHouse copy would read.
+Two orchestrators call the same task functions in `orchestration/tasks.py`. The command-line runner (`orchestration/dag.py`, `orchestration/runner.py`) is what `docker compose up` runs. The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` (compose profile `airflow`) adds daily data intervals, backfills, per-task retries and timeouts, and run history. Each Airflow task runs one step of `orchestration/airflow_steps.py` in the platform's own virtualenv, because Airflow's dependency constraints pin other versions of Polars, pandas, and psycopg; see [airflow.md](airflow.md). Superset and ClickHouse are not used. The mart table and the prediction mart are the contracts a BI tool or a ClickHouse copy would read.
 
 ## 2. Databases, roles, and schemas
 

@@ -32,7 +32,7 @@ A local, repeatable batch platform on PostgreSQL 17 and Python 3.12. It loads a 
 24. [Example SQL queries](#24-example-sql-queries)
 25. [Known limitations and future improvements](#25-known-limitations-and-future-improvements)
 
-Detailed documents: [architecture](docs/architecture.md), [data dictionary](docs/data_dictionary.md), [ETL design](docs/etl_design.md), [data quality report](docs/data_quality_report.md), [mart design](docs/mart_design.md), [feature engineering report](docs/feature_engineering_report.md), [ML design](docs/ml_design.md), [ML evaluation report](docs/ml_evaluation_report.md).
+Detailed documents: [architecture](docs/architecture.md), [data dictionary](docs/data_dictionary.md), [ETL design](docs/etl_design.md), [data quality report](docs/data_quality_report.md), [mart design](docs/mart_design.md), [feature engineering report](docs/feature_engineering_report.md), [ML design](docs/ml_design.md), [ML evaluation report](docs/ml_evaluation_report.md), [Airflow orchestration](docs/airflow.md).
 
 ## 1. Project overview
 
@@ -81,7 +81,10 @@ flowchart LR
   score --> pred[("Prediction Mart<br/>ml.ml_price_predictions")]
 ```
 
-The Python runner executes these steps as tasks with declared dependencies: `source_ready → warehouse_ready → migrate → etl → data_quality → mart → features → train → score_test → score_future → verify → report`. There is no Airflow: one daily batch over 300,000 deals does not justify another service, and the runner already provides ordering, retries, failure propagation, and a report.
+Two orchestrators run the same task functions:
+
+- The command-line runner (`python -m scripts.run_pipeline`) runs `source_ready → warehouse_ready → migrate → etl → data_quality → mart → features → train → score_test → score_future → verify → report`, with retries and a run report. It is what `docker compose up` runs.
+- The Apache Airflow 3.4 DAG `smart_logistics_data_pipeline` runs one data interval per day, plus backfills: `check_source_connectivity → validate_source_data → prepare_warehouse → run_etl → run_data_quality → (refresh_marts ‖ generate_features → train_or_load_model → run_batch_inference) → validate_prediction_records → publish_pipeline_statistics`. See [docs/airflow.md](docs/airflow.md).
 
 ## 4. Technology stack
 
@@ -95,7 +98,8 @@ The Python runner executes these steps as tasks with declared dependencies: `sou
 | Baselines, metrics | scikit-learn | Ridge and DecisionTree baselines, metric cross-checks |
 | Storage of features | Parquet (PyArrow) | Exact, typed, reproducible feature snapshots |
 | Deployment | Docker Compose | One command to build the snapshot, warehouse, mart, and model |
-| Tests | pytest | 257 tests: unit and integration against the real snapshot |
+| Scheduling | Apache Airflow 3.4 (optional compose profile) | Daily data intervals, backfills, per-task retries and timeouts, run history. Tasks run the platform in its own virtualenv, because Airflow's constraints pin other library versions |
+| Tests | pytest | 292 tests: unit and integration against the real snapshot, plus Airflow DAG tests |
 
 All 33 Python packages are pinned in `constraints.txt` (`pip install -r requirements.txt -c constraints.txt`).
 
@@ -436,6 +440,21 @@ Exit codes: 0 success, 1 a task failed or did not run, 2 usage or configuration 
 | `PIPELINE_DB_WAIT_TIMEOUT_S`, `PIPELINE_DB_WAIT_INTERVAL_S`, `PIPELINE_RETRY_BACKOFF_S` | Readiness wait and retry backoff |
 | `PIPELINE_REPORT_DIR`, `ML_FEATURE_DIR`, `ML_ARTIFACT_DIR` | Output directories (relative defaults) |
 
+**Airflow.** The `airflow` profile adds a metadata database, `airflow-init`, an API server with the UI at `http://127.0.0.1:18080`, a scheduler with the LocalExecutor, and a DAG processor:
+
+```bash
+docker compose up --build --exit-code-from pipeline                     # first full load, as above
+docker compose --profile airflow up -d --build
+docker compose exec airflow-apiserver cat /opt/airflow/simple_auth_manager_passwords.json.generated   # admin password
+docker compose exec airflow-scheduler airflow dags unpause smart_logistics_data_pipeline
+docker compose exec airflow-scheduler airflow backfill create --dag-id smart_logistics_data_pipeline \
+  --from-date 2026-09-01 --to-date 2026-09-07 --max-active-runs 1
+docker compose exec airflow-scheduler airflow dags trigger smart_logistics_data_pipeline \
+  --conf '{"start_date": "2026-09-01", "end_date": "2026-09-30"}'
+```
+
+A scheduled run at D+1 00:00 UTC loads `loading_date` D. Transient database errors are retried with exponential backoff; data quality, integrity, and credential errors fail at once. Every run, failed or not, is recorded in `audit.pipeline_run` with `mode = 'airflow'`. Variables: `AIRFLOW_DB_*`, `AIRFLOW__API_AUTH__JWT_SECRET`, `AIRFLOW_PUBLISH_PORT`, `PIPELINE_AIRFLOW_RETRIES`, `PIPELINE_AIRFLOW_RETRY_DELAY_S`. Details, the test results, and running without Docker are in [docs/airflow.md](docs/airflow.md).
+
 **Running from the host** against the compose database (Python 3.11+):
 
 ```bash
@@ -463,8 +482,9 @@ pytest -q                                           # everything; needs the data
 | Mart | `test_mart_market_corridor.py` (independent Python recomputation of every metric) |
 | ML | `test_ml_features.py`, `test_ml_feature_dataset.py`, `test_ml_model.py`, `test_ml_scoring.py` |
 | Pipeline | `test_pipeline_runner.py`, `test_pipeline_integration.py` |
+| Airflow | `test_airflow_steps.py`, `test_airflow_dag.py` (DAG graph and retry tests run only where `apache-airflow` is installed: `.venv-airflow/bin/python -m pytest -o addopts="" tests/test_airflow_dag.py`) |
 
-Latest result against a clean warehouse: **257 passed in 260.96 s**; `-m "not integration"` alone: 152 passed in 2.3 s with no database configured. Integration tests commit idempotent batches to the warehouse they target and assert the exact counts of the 300,000-deal snapshot, so run them against a disposable warehouse built from that snapshot.
+Latest result against a clean warehouse: **286 passed, 6 skipped in 273.12 s**. The 6 skipped tests need `apache-airflow`; in the Airflow virtualenv, `tests/test_airflow_dag.py` gives 21 passed. `-m "not integration"` alone: 180 passed, 6 skipped in 2.3 s with no database configured. Integration tests commit idempotent batches to the warehouse they target and assert the exact counts of the 300,000-deal snapshot, so run them against a disposable warehouse built from that snapshot.
 
 Quality tools:
 
@@ -540,6 +560,7 @@ FROM audit.pipeline_run ORDER BY started_at DESC LIMIT 5;
 
 - `docker compose up` was never executed (no Docker on the development host). The compose file passes `docker compose config`, the image's dependencies resolve to Python 3.12 wheels, and the pipeline ran against an equivalent clean PostgreSQL 17.11 cluster. The image build and the container network are untested.
 - Training ran on Python 3.11; the image uses 3.12 with the same pinned package versions.
+- The Airflow image and compose services were never started either. The DAG ran on Airflow 3.4.0 outside Docker against the clean cluster: normal, backfill, repeated, transient-failure, and permanent-failure runs ([docs/airflow.md](docs/airflow.md), section 8).
 
 **Data and ETL**
 
@@ -569,4 +590,4 @@ FROM audit.pipeline_run ORDER BY started_at DESC LIMIT 5;
 - A process killed outside the database leaves its `audit.etl_batch` row `running`; no sweeper exists.
 - The run report spends about 5.5 s on fingerprints of raw and quarantine.
 
-**Next steps:** an `updated_at` watermark for late changes; monthly partitions for the mart; a rolling retraining schedule and drift monitoring on `ml.v_prediction_error_summary`; prediction intervals (quantile loss); a hash-locked requirements file; and, if the batch count grows, moving the task graph to a scheduler such as Airflow without changing the tasks.
+**Next steps:** an `updated_at` watermark for late changes; monthly partitions for the mart; a rolling retraining schedule and drift monitoring on `ml.v_prediction_error_summary`; prediction intervals (quantile loss); a hash-locked requirements file; and a rolling as-of date, so the Airflow DAG's ML steps follow the data interval instead of the fixed snapshot.
