@@ -3,6 +3,7 @@
 !.env.example
 .local-pg/
 .venv/
+.venv-airflow/
 venv/
 __pycache__/
 .pytest_cache/
