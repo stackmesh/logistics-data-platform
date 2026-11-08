@@ -21,5 +21,6 @@ requirements/reference/attachments
 .idea
 .vscode
 .local-pg
+.local-ch
 artifacts
 ml/artifacts

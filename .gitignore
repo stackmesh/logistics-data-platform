@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 .local-pg/
+.local-ch/
 .venv/
 .venv-airflow/
 .venv-superset/

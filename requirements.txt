@@ -5,3 +5,4 @@ numpy>=1.26,<3
 pytest>=8.3,<9
 catboost==1.2.10
 scikit-learn>=1.5,<1.8
+clickhouse-connect>=0.15,<0.16
