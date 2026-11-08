@@ -209,8 +209,8 @@ def test_failed_scoring_rolls_back(trained, scored, dwh_engine, monkeypatch):
         before = dict(conn.execute(text(PREDICTIONS_HASH), _params(card)).mappings().one())
     real_write = scoring.write_predictions
 
-    def write_then_fail(conn, frame, card_, batch_id):
-        real_write(conn, frame.with_columns(frame["predicted_price_rub"] * 2), card_, batch_id)
+    def write_then_fail(conn, frame, card_, batch_id, roles):
+        real_write(conn, frame.with_columns(frame["predicted_price_rub"] * 2), card_, batch_id, roles)
         raise RuntimeError("injected failure after upsert")
 
     monkeypatch.setattr(scoring, "write_predictions", write_then_fail)

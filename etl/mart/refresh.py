@@ -2,6 +2,7 @@
 
     python -m etl.mart.refresh
     python -m etl.mart.refresh --as-of 2026-10-26
+    python -m etl.mart.refresh --if-changed
 """
 
 from __future__ import annotations
@@ -20,7 +21,16 @@ from etl.log import configure_logging, log_event
 
 MART_NAME = "mart.mart_market_corridor"
 MAX_ERROR_LENGTH = 4000
+LOCK_KEY = "logistics_dwh.core_etl"
 logger = logging.getLogger("etl.mart")
+
+LAST_REFRESH_SQL = """
+SELECT refresh_id, input_fingerprint
+FROM audit.mart_refresh
+WHERE mart_name = :mart AND status = 'succeeded' AND as_of_date = :as_of
+ORDER BY refresh_id DESC
+LIMIT 1
+"""
 
 SUMMARY_SQL = """
 SELECT count(*) AS cells,
@@ -51,6 +61,8 @@ def refresh_market_corridor(engine: Engine, as_of: date) -> dict:
     started = time.perf_counter()
     try:
         with engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": LOCK_KEY})
+            fingerprint = conn.execute(text("SELECT mart.market_corridor_input_fingerprint()")).scalar_one()
             deleted, inserted = conn.execute(
                 text("CALL mart.refresh_market_corridor(:as_of, :refresh_id, NULL, NULL)"),
                 {"as_of": as_of, "refresh_id": refresh_id},
@@ -58,8 +70,9 @@ def refresh_market_corridor(engine: Engine, as_of: date) -> dict:
             conn.execute(text("ANALYZE mart.mart_market_corridor"))
             conn.execute(
                 text("UPDATE audit.mart_refresh SET status = 'succeeded', completed_at = clock_timestamp(), "
-                     "rows_deleted = :deleted, rows_inserted = :inserted WHERE refresh_id = :refresh_id"),
-                {"deleted": deleted, "inserted": inserted, "refresh_id": refresh_id},
+                     "rows_deleted = :deleted, rows_inserted = :inserted, input_fingerprint = :fingerprint "
+                     "WHERE refresh_id = :refresh_id"),
+                {"deleted": deleted, "inserted": inserted, "fingerprint": fingerprint, "refresh_id": refresh_id},
             )
             summary = dict(conn.execute(text(SUMMARY_SQL)).mappings().one())
     except Exception as exc:
@@ -74,11 +87,13 @@ def refresh_market_corridor(engine: Engine, as_of: date) -> dict:
         raise
 
     result = {
+        "status": "refreshed",
         "refresh_id": refresh_id,
         "mart": MART_NAME,
         "as_of_date": as_of,
         "rows_deleted": int(deleted),
         "rows_inserted": int(inserted),
+        "input_fingerprint": fingerprint,
         "duration_s": round(time.perf_counter() - started, 3),
         **summary,
     }
@@ -86,15 +101,51 @@ def refresh_market_corridor(engine: Engine, as_of: date) -> dict:
     return result
 
 
+def refresh_if_changed(engine: Engine, as_of: date) -> dict:
+    """Skip the rebuild when the last successful refresh for as_of saw the same inputs and the mart is intact."""
+    started = time.perf_counter()
+    with engine.begin() as conn:
+        conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": LOCK_KEY})
+        fingerprint = conn.execute(text("SELECT mart.market_corridor_input_fingerprint()")).scalar_one()
+        last = conn.execute(text(LAST_REFRESH_SQL), {"mart": MART_NAME, "as_of": as_of}).mappings().one_or_none()
+        current_rows = conn.execute(
+            text("SELECT count(*) FROM mart.mart_market_corridor WHERE refresh_id = :refresh_id AND as_of_date = :as_of"),
+            {"refresh_id": last["refresh_id"] if last else -1, "as_of": as_of},
+        ).scalar_one()
+        total_rows = conn.execute(text("SELECT count(*) FROM mart.mart_market_corridor")).scalar_one()
+        unchanged = (last is not None and last["input_fingerprint"] == fingerprint
+                     and current_rows > 0 and current_rows == total_rows)
+        if unchanged:
+            summary = dict(conn.execute(text(SUMMARY_SQL)).mappings().one())
+    if not unchanged:
+        return refresh_market_corridor(engine, as_of)
+    result = {
+        "status": "unchanged",
+        "refresh_id": last["refresh_id"],
+        "mart": MART_NAME,
+        "as_of_date": as_of,
+        "rows_deleted": 0,
+        "rows_inserted": 0,
+        "input_fingerprint": fingerprint,
+        "duration_s": round(time.perf_counter() - started, 3),
+        **summary,
+    }
+    log_event(logger, "mart_refresh_skipped", reason="inputs unchanged since last refresh", **result)
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m etl.mart.refresh")
     parser.add_argument("--as-of", type=date.fromisoformat, help="snapshot date (default AS_OF_DATE)")
+    parser.add_argument("--if-changed", action="store_true",
+                        help="skip the rebuild when core inputs and the mart definition are unchanged")
     args = parser.parse_args(argv)
     configure_logging()
     config = load_config()
     engine = warehouse_engine(config)
+    refresh = refresh_if_changed if args.if_changed else refresh_market_corridor
     try:
-        refresh_market_corridor(engine, args.as_of or config.as_of_date)
+        refresh(engine, args.as_of or config.as_of_date)
     except Exception:
         return 1
     finally:

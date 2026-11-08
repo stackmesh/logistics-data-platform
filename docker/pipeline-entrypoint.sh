@@ -5,7 +5,7 @@ set -euo pipefail
 unset POSTGRES_PASSWORD
 
 if [[ $# -eq 0 ]]; then
-  set -- python scripts/check_databases.py
+  set -- python -m scripts.run_pipeline --mode full
 fi
 
 exec "$@"

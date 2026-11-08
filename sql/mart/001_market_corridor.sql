@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS audit.mart_refresh (
 
 CREATE INDEX IF NOT EXISTS mart_refresh_started_idx ON audit.mart_refresh (mart_name, started_at);
 
+ALTER TABLE audit.mart_refresh ADD COLUMN IF NOT EXISTS input_fingerprint text;
+
+COMMENT ON COLUMN audit.mart_refresh.input_fingerprint IS
+    'mart.market_corridor_input_fingerprint() under the refresh lock. Equal value and as_of means the rebuild can be skipped.';
+
 CREATE TABLE IF NOT EXISTS mart.mart_market_corridor (
     price_month            date NOT NULL,
     loading_city_gcid      integer NOT NULL REFERENCES core.dim_city (gc_id),
@@ -256,5 +261,34 @@ $$;
 
 COMMENT ON PROCEDURE mart.refresh_market_corridor(date, bigint, bigint, bigint) IS
     'Replace mart.mart_market_corridor for a snapshot date inside the caller''s transaction.';
+
+-- Hash of every core value the build reads, plus the build and refresh definitions.
+CREATE OR REPLACE FUNCTION mart.market_corridor_input_fingerprint()
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+SELECT md5(concat_ws('|',
+    (SELECT md5(coalesce(string_agg(md5(ROW(price_id, loading_city_gcid, unloading_city_gcid, weight_category,
+                                            price_rub, distance_km, organization_id, price_type, is_fact,
+                                            complex, outlier_mark, currency_code, fx_rate)::text),
+                                    '' ORDER BY price_id), ''))
+     FROM core.fact_deal),
+    (SELECT md5(coalesce(string_agg(md5(ROW(price_id, price_date)::text), '' ORDER BY price_id, price_date), ''))
+     FROM core.fact_deal_date),
+    (SELECT md5(coalesce(string_agg(md5(ROW(price_id, body_group_code)::text), ''
+                                    ORDER BY price_id, body_group_code), ''))
+     FROM core.bridge_deal_body_group),
+    (SELECT md5(coalesce(string_agg(md5(ROW(gc_id, name)::text), '' ORDER BY gc_id), '')) FROM core.dim_city),
+    (SELECT md5(coalesce(string_agg(md5(ROW(body_group_code, body_group_name)::text), ''
+                                    ORDER BY body_group_code), ''))
+     FROM core.dim_body_group),
+    md5(pg_get_functiondef('mart.build_market_corridor(date)'::regprocedure)),
+    md5(pg_get_functiondef('mart.refresh_market_corridor(date, bigint, bigint, bigint)'::regprocedure))
+))
+$$;
+
+COMMENT ON FUNCTION mart.market_corridor_input_fingerprint() IS
+    'Change detector for mart.mart_market_corridor inputs. Used to skip a rebuild when nothing it reads changed.';
 
 COMMIT;

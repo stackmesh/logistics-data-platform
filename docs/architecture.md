@@ -296,8 +296,8 @@ flowchart TB
 
 | Service | Image | Lifetime |
 | --- | --- | --- |
-| `postgres` | `postgres:17` | Stays up. Health check is `pg_isready` |
-| `pipeline` | Project image, Python 3.12 | Runs once: warehouse DDL, full refresh, mart, train, score. Exits 0 on success |
+| `postgres` | `postgres:17` | Stays up. Health check is `pg_isready` plus the `audit.bootstrap` row written after generation |
+| `pipeline` | Project image, Python 3.12 | Runs `python -m scripts.run_pipeline --mode full`: health checks, migrations, ETL, data quality, mart, features, training, test and future scoring, verification, report. Exits 0 on success |
 
 Init, on an empty data volume only:
 
@@ -305,9 +305,9 @@ Init, on an empty data volume only:
 2. Apply `schema.sql` and `synthetic.sql` with `n_prices=300000` to the source database.
 3. Create `source_reader` (`SELECT` on the source) and `dwh_etl` (DDL and DML on the warehouse).
 
-The pipeline service waits for the health check, applies `sql/dwh`, then runs the full refresh. A second `docker compose up` does not regenerate the snapshot and does not rerun a container that already exited. Replay is explicit:
+The pipeline service starts after the health check and polls both databases again before its first task, because the server restarts once when initialization finishes. A second `docker compose up` does not regenerate the snapshot; it starts the exited pipeline container again, and every task is idempotent. Replay is explicit:
 
-`docker compose run --rm pipeline python -m etl.cli run --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
+`docker compose run --rm pipeline python -m scripts.run_pipeline --mode backfill --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
 
 Connection settings live in the environment: host, port, both database names, both roles, `AS_OF_DATE=2026-10-26`, `N_PRICES=300000`, `RANDOM_SEED=20261026`.
 

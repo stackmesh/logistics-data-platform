@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import logging
 import time
@@ -71,12 +72,44 @@ def model_version(dataset: FeatureDataset, config: TrainingConfig) -> str:
     return f"{dataset.split.as_of:%Y%m%d}-{hashlib.sha256(payload.encode()).hexdigest()[:12]}"
 
 
+class CatBoostLog(io.TextIOBase):
+    """File-like sink that turns CatBoost's verbose text into JSON log events, one per line."""
+
+    def __init__(self, level: int = logging.INFO) -> None:
+        super().__init__()
+        self._level = level
+        self._buffer = ""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, chunk: str) -> int:
+        self._buffer += chunk
+        *lines, self._buffer = self._buffer.split("\n")
+        for line in lines:
+            self._emit(line)
+        return len(chunk)
+
+    def flush(self) -> None:
+        if self._buffer:
+            self._emit(self._buffer)
+            self._buffer = ""
+
+    def _emit(self, line: str) -> None:
+        if line.strip():
+            log_event(logger, "catboost_progress", self._level, line=" ".join(line.split()))
+
+
 def _fit_catboost(config: TrainingConfig, train: Pool, eval_set: Pool | None, iterations: int | None):
     model = CatBoostRegressor(**config.catboost_params(list(CATEGORICAL_FEATURES), iterations))
+    out, err = CatBoostLog(), CatBoostLog(logging.WARNING)
     if eval_set is None:
-        model.fit(train)
+        model.fit(train, log_cout=out, log_cerr=err)
     else:
-        model.fit(train, eval_set=eval_set, early_stopping_rounds=config.early_stopping_rounds, use_best_model=True)
+        model.fit(train, eval_set=eval_set, early_stopping_rounds=config.early_stopping_rounds, use_best_model=True,
+                  log_cout=out, log_cerr=err)
+    out.flush()
+    err.flush()
     return model
 
 

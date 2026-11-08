@@ -55,8 +55,13 @@ CREATE TABLE IF NOT EXISTS audit.ml_scoring_batch (
     CONSTRAINT ml_scoring_batch_completed_check CHECK ((status = 'running') = (completed_at IS NULL))
 );
 
+ALTER TABLE audit.ml_scoring_batch
+    ADD COLUMN IF NOT EXISTS split_roles text[] NOT NULL DEFAULT ARRAY['test', 'future'];
+
 CREATE INDEX IF NOT EXISTS ml_scoring_batch_model_idx
     ON audit.ml_scoring_batch (model_name, model_version, started_at);
+
+COMMENT ON COLUMN audit.ml_scoring_batch.split_roles IS 'Roles this batch staged and reconciled.';
 
 CREATE TABLE IF NOT EXISTS ml.ml_price_predictions (
     price_id              bigint NOT NULL REFERENCES core.fact_deal (price_id) ON DELETE CASCADE,
@@ -98,8 +103,12 @@ COMMENT ON COLUMN ml.ml_price_predictions.actual_price_rub IS
 COMMENT ON COLUMN ml.ml_price_predictions.ape_pct IS 'abs_error_rub / actual_price_rub * 100.';
 
 -- Staged predictions in, typed rows out. actual comes from core for test rows only.
+DROP FUNCTION IF EXISTS ml.upsert_price_predictions(text, text, date, bigint);
+
+-- Rows of p_split_roles that are no longer staged are deleted; other roles are untouched,
+-- so test and future scoring can run as separate batches.
 CREATE OR REPLACE FUNCTION ml.upsert_price_predictions(
-    p_model_name text, p_model_version text, p_as_of date, p_batch_id bigint
+    p_model_name text, p_model_version text, p_as_of date, p_batch_id bigint, p_split_roles text[]
 )
 RETURNS TABLE (rows_inserted bigint, rows_updated bigint, rows_deleted bigint)
 LANGUAGE plpgsql
@@ -109,6 +118,10 @@ DECLARE
     v_updated bigint;
     v_deleted bigint;
 BEGIN
+    IF EXISTS (SELECT 1 FROM stage_price_predictions WHERE split_role <> ALL (p_split_roles)) THEN
+        RAISE EXCEPTION 'staged split_role outside %', p_split_roles;
+    END IF;
+
     WITH upserted AS (
         INSERT INTO ml.ml_price_predictions AS t (
             price_id, model_name, model_version, split_role, as_of_date, loading_date,
@@ -154,6 +167,7 @@ BEGIN
     DELETE FROM ml.ml_price_predictions AS t
     WHERE t.model_name = p_model_name
       AND t.model_version = p_model_version
+      AND t.split_role = ANY (p_split_roles)
       AND NOT EXISTS (SELECT 1 FROM stage_price_predictions AS s WHERE s.price_id = t.price_id);
     GET DIAGNOSTICS v_deleted = ROW_COUNT;
 

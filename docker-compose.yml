@@ -64,7 +64,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: logistics-pipeline:stage3
+    image: logistics-pipeline:local
     container_name: logistics-pipeline
     env_file:
       - path: .env.example
@@ -74,18 +74,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command:
-      - bash
-      - -c
-      - python -m etl.migrate && python scripts/check_databases.py && python -m etl.main --full && python -m etl.mart.refresh && python -m ml.features.dataset && python -m ml.model.train && python -m ml.scoring.score
+    command: ["python", "-m", "scripts.run_pipeline", "--mode", "${PIPELINE_MODE:-full}"]
     volumes:
-      - ml_artifacts:/app/artifacts
+      - pipeline_artifacts:/app/artifacts
       - ml_models:/app/ml/artifacts
     restart: "no"
     init: true
 
   tests:
-    image: logistics-pipeline:stage3
+    image: logistics-pipeline:local
     build:
       context: .
       dockerfile: Dockerfile
@@ -103,10 +100,13 @@ services:
       - bash
       - -c
       - python -m etl.migrate && python -m pytest -q -p no:cacheprovider
+    volumes:
+      - pipeline_artifacts:/app/artifacts
+      - ml_models:/app/ml/artifacts
     restart: "no"
     init: true
 
 volumes:
   logistics_pgdata:
-  ml_artifacts:
+  pipeline_artifacts:
   ml_models:
