@@ -1,4 +1,4 @@
-"""Apply sql/core migrations in file-name order. Each file manages its own transaction."""
+"""Apply sql/core, then sql/mart migrations, in file-name order. Each file manages its own transaction."""
 
 from __future__ import annotations
 
@@ -11,16 +11,17 @@ import psycopg
 from etl.config import load_config
 from etl.log import configure_logging, log_event
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "sql" / "core"
+SQL_DIR = Path(__file__).resolve().parents[1] / "sql"
+MIGRATION_DIRS = (SQL_DIR / "core", SQL_DIR / "mart")
 logger = logging.getLogger("etl.migrate")
 
 
-def apply_migrations(directory: Path = MIGRATIONS_DIR) -> list[str]:
+def apply_migrations(directories: tuple[Path, ...] = MIGRATION_DIRS) -> list[str]:
     settings = load_config().database
     target = settings.warehouse
-    files = sorted(directory.glob("[0-9]*.sql"))
+    files = [path for directory in directories for path in sorted(directory.glob("[0-9]*.sql"))]
     if not files:
-        raise FileNotFoundError(f"no migrations in {directory}")
+        raise FileNotFoundError(f"no migrations in {', '.join(map(str, directories))}")
     with psycopg.connect(
         host=settings.host,
         port=settings.port,
@@ -33,8 +34,8 @@ def apply_migrations(directory: Path = MIGRATIONS_DIR) -> list[str]:
     ) as conn:
         for path in files:
             conn.execute(path.read_text(encoding="utf-8"))
-            log_event(logger, "migration_applied", file=path.name)
-    return [path.name for path in files]
+            log_event(logger, "migration_applied", file=f"{path.parent.name}/{path.name}")
+    return [f"{path.parent.name}/{path.name}" for path in files]
 
 
 def main() -> int:

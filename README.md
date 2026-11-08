@@ -198,6 +198,16 @@ python scripts/dq_audit.py                          # evidence behind docs/data_
 
 Results are in [docs/data_quality_report.md](docs/data_quality_report.md).
 
+## Market corridor mart
+
+```bash
+python -m etl.mart.refresh                  # rebuild mart.mart_market_corridor for AS_OF_DATE, one transaction
+psql -f sql/mart/examples.sql               # six example queries
+pytest tests/test_mart_market_corridor.py   # reference recomputation, edge cases, repeated refresh
+```
+
+The compose `pipeline` service refreshes the mart after the ETL. Definitions, indexes, and the results on the real warehouse are in [docs/mart_market_corridor.md](docs/mart_market_corridor.md).
+
 ## Reset
 
 Initialization runs only on an empty data volume.

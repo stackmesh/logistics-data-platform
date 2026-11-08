@@ -77,7 +77,7 @@ services:
     command:
       - bash
       - -c
-      - python -m etl.migrate && python scripts/check_databases.py && python -m etl.main --full
+      - python -m etl.migrate && python scripts/check_databases.py && python -m etl.main --full && python -m etl.mart.refresh
     restart: "no"
     init: true
 

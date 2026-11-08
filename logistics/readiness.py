@@ -270,11 +270,11 @@ def run_checks(settings: Settings | None = None) -> Report:
                 )
             ).mappings()
             relation_list = [f"{row['schema_name']}.{row['table_name']}" for row in relations]
-            reserved = [name for name in relation_list if name.startswith(("mart.", "ml."))]
+            reserved = [name for name in relation_list if name.startswith("ml.")]
             report.add("audit.bootstrap" in relation_list, "audit.bootstrap exists")
             report.add(
                 not reserved,
-                "mart and ml schemas have no tables"
+                "ml schema has no tables"
                 if not reserved
                 else "reserved schemas already have tables: " + ", ".join(reserved),
             )

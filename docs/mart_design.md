@@ -1,6 +1,6 @@
 # Mart design
 
-Status: design for approval. The mart answers the four product questions in the meeting summary: which rate to use, whether a price sits in the market band, whether the sample is large enough to trust, and how closed deals compare with the band and the forecast. The forecast comparison is the ML table in `docs/ml_design.md`. This document is the band and the evidence.
+Status: implemented as `mart.mart_market_corridor`. See [mart_market_corridor.md](mart_market_corridor.md) for the implemented definitions, refresh, and real results. This document keeps the original design. The mart answers the four product questions in the meeting summary: which rate to use, whether a price sits in the market band, whether the sample is large enough to trust, and how closed deals compare with the band and the forecast. The forecast comparison is the ML table in `docs/ml_design.md`. This document is the band and the evidence.
 
 There is one physical aggregate, `mart.route_card`. `mart.market_corridor` is a view over it. BI that needs a network table and BI that needs one route's history read the same grain.
 
