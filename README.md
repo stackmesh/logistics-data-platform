@@ -89,6 +89,22 @@ python scripts/check_databases.py
 
 The host command needs the Python dependencies in `requirements.txt` and uses the machine's Python. The container image is Python 3.12.
 
+## Core warehouse schema
+
+`sql/core/` creates the raw snapshots, conformed dimensions and deal fact, quarantine, and batch history. It does not copy source rows. Apply it after the database is healthy, using the warehouse role:
+
+```bash
+export PGHOST=localhost PGPORT="${POSTGRES_PUBLISH_PORT:-5432}"
+export PGUSER="$DWH_DB_USER" PGPASSWORD="$DWH_DB_PASSWORD" PGDATABASE="$DWH_DB_NAME"
+bash sql/core/apply.sh
+```
+
+The script is safe to run again. Schema checks:
+
+```bash
+pytest tests/test_core_schema.py -q
+```
+
 ## Reset
 
 Initialization runs only on an empty data volume.

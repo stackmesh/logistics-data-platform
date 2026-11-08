@@ -270,9 +270,13 @@ def run_checks(settings: Settings | None = None) -> Report:
                 )
             ).mappings()
             relation_list = [f"{row['schema_name']}.{row['table_name']}" for row in relations]
+            reserved = [name for name in relation_list if name.startswith(("mart.", "ml."))]
+            report.add("audit.bootstrap" in relation_list, "audit.bootstrap exists")
             report.add(
-                relation_list == ["audit.bootstrap"],
-                "warehouse tables: " + (", ".join(relation_list) or "(none)"),
+                not reserved,
+                "mart and ml schemas have no tables"
+                if not reserved
+                else "reserved schemas already have tables: " + ", ".join(reserved),
             )
 
         source_denied, source_denied_detail = _access_denied(
