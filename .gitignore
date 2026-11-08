@@ -1,10 +1,13 @@
 .env
+.env.*
+!.env.example
 .local-pg/
 .venv/
 venv/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 *.py[cod]
 *.egg-info/
 dist/
@@ -14,3 +17,7 @@ build/
 *.log
 artifacts/
 ml/artifacts/
+*.parquet
+*.cbm
+*.pkl
+*.csv.gz
