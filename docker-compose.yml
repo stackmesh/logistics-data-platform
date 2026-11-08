@@ -306,6 +306,56 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Analytical copy of the warehouse. PostgreSQL stays authoritative; clickhouse-sync rebuilds this from it.
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.34.13
+    container_name: logistics-clickhouse
+    profiles: ["clickhouse"]
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:${CLICKHOUSE_PUBLISH_PORT:-18123}:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user \"$$CLICKHOUSE_USER\" --password \"$$CLICKHOUSE_PASSWORD\" -q 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 30
+    restart: unless-stopped
+
+  # One-shot incremental sync plus consistency check; exit code 0 only when ClickHouse matches PostgreSQL.
+  clickhouse-sync:
+    image: logistics-pipeline:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: logistics-clickhouse-sync
+    profiles: ["clickhouse"]
+    env_file:
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
+    command: ["python", "-m", "etl.clickhouse.sync"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: "no"
+    init: true
+
 volumes:
   logistics_pgdata:
   pipeline_artifacts:
@@ -313,3 +363,4 @@ volumes:
   airflow_pgdata:
   airflow_logs:
   superset_pgdata:
+  clickhouse_data:

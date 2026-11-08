@@ -15,6 +15,7 @@ COPY etl ./etl
 COPY ml ./ml
 COPY orchestration ./orchestration
 COPY sql ./sql
+COPY clickhouse ./clickhouse
 COPY scripts ./scripts
 COPY tests ./tests
 COPY pytest.ini .
