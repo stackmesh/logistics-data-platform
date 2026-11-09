@@ -1,5 +1,27 @@
 # Smart Logistics Data & ML Platform
 
+The Apache Superset dashboard **Smart Logistics — Market Rate Intelligence** is the interface on the warehouse. Four tabs cover the market, route corridors, dynamics, and fact versus forecast. Amounts are RUB.
+
+### Market Overview
+
+![Market Overview: completed trips, carriers, median and average rates, price per kilometre, reliability, the monthly median, median by body group, and the reliability mix](<docs/images/01_Market Overview.png>)
+
+### Route Pricing
+
+![Route Pricing: one row per month, route, body group, and weight category, with the P25–P75 corridor, month-over-month and year-over-year change, and Data Trust](<docs/images/02_Route Pricing.png>)
+
+### Market Dynamics
+
+![Market Dynamics: monthly median, the P25/P50/P75 price corridor, and month-over-month and year-over-year change over the full history](<docs/images/03_Market Dynamics.png>)
+
+### Fact vs Forecast
+
+![Fact vs Forecast: mean absolute error, median absolute percent error, historical and future deal counts, daily actual versus predicted, and the error-band distribution](<docs/images/04_Fact vs Forecast.png>)
+
+### Chart editor
+
+![Chart editor for Historical deals by absolute error band, querying mart.v_fact_vs_forecast](<docs/images/05_Charts.png>)
+
 A local, repeatable batch platform on PostgreSQL 17 and Python 3.12. It loads a synthetic operational snapshot of 300,000 freight deals into a warehouse, publishes a monthly market price corridor with a Data Trust rating, trains a CatBoost model of the carrier trip price, and writes fact-versus-forecast predictions for the held-out test window and for planned future deals. One command runs the whole chain and writes an execution report.
 
 > **Verification status.** Docker could not be run on the development host (no Docker binary, no root, no rootless support). Everything else was executed: the compose file was validated with Docker Compose v2.39.4, the pinned requirements were resolved to Python 3.12 wheels, and the full pipeline and test suite ran against a clean PostgreSQL 17.11 cluster set up the way the `postgres:17` container sets up an empty volume. `docker compose up` itself has not been executed. See [Known limitations](#25-known-limitations-and-future-improvements).
